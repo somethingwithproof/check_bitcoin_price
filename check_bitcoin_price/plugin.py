@@ -8,7 +8,7 @@ and returns appropriate Nagios status codes based on configured thresholds.
 
 import argparse
 import sys
-from typing import NamedTuple, Optional
+from typing import NamedTuple, Optional, Tuple
 
 import requests
 
@@ -233,7 +233,7 @@ Examples:
     return parser.parse_args(args)
 
 
-def parse_range(range_str: str) -> tuple[Optional[float], Optional[float]]:
+def parse_range(range_str: str) -> Tuple[Optional[float], Optional[float]]:
     """
     Parse a Nagios-style range string.
 
