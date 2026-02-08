@@ -2,7 +2,6 @@
 
 import pytest
 import responses
-from requests.exceptions import Timeout
 
 from check_bitcoin_price.plugin import (
     CRITICAL,
