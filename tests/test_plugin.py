@@ -1,19 +1,19 @@
 """Tests for the Bitcoin price checker Nagios plugin."""
 
 import pytest
+import requests
 import responses
-from requests.exceptions import Timeout
 
 from check_bitcoin_price.plugin import (
-    OK,
-    WARNING,
     CRITICAL,
+    DEFAULT_API_URL,
+    OK,
     UNKNOWN,
+    WARNING,
     BitcoinPriceChecker,
+    main,
     parse_args,
     parse_range,
-    main,
-    DEFAULT_API_URL,
 )
 
 
@@ -62,7 +62,7 @@ class TestBitcoinPriceChecker:
 
         checker = BitcoinPriceChecker()
 
-        with pytest.raises(Exception):
+        with pytest.raises(requests.HTTPError):
             checker.get_bitcoin_price()
 
     def test_check_thresholds_ok(self):
@@ -188,12 +188,18 @@ class TestParseArgs:
 
     def test_parse_args_individual_thresholds(self):
         """Test parsing individual threshold arguments."""
-        args = parse_args([
-            "--warning-low", "30000",
-            "--warning-high", "50000",
-            "--critical-low", "25000",
-            "--critical-high", "60000",
-        ])
+        args = parse_args(
+            [
+                "--warning-low",
+                "30000",
+                "--warning-high",
+                "50000",
+                "--critical-low",
+                "25000",
+                "--critical-high",
+                "60000",
+            ]
+        )
 
         assert args.warning_low == 30000
         assert args.warning_high == 50000
