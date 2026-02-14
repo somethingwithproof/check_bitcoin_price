@@ -8,7 +8,7 @@ and returns appropriate Nagios status codes based on configured thresholds.
 
 import argparse
 import sys
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 import requests
 
@@ -82,10 +82,10 @@ class BitcoinPriceChecker:
     def check_thresholds(
         self,
         price: float,
-        warning_low: Optional[float] = None,
-        warning_high: Optional[float] = None,
-        critical_low: Optional[float] = None,
-        critical_high: Optional[float] = None,
+        warning_low: float | None = None,
+        warning_high: float | None = None,
+        critical_low: float | None = None,
+        critical_high: float | None = None,
     ) -> ThresholdResult:
         """
         Check price against warning and critical thresholds.
@@ -137,7 +137,7 @@ class BitcoinPriceChecker:
         )
 
 
-def parse_args(args: Optional[list] = None) -> argparse.Namespace:
+def parse_args(args: list | None = None) -> argparse.Namespace:
     """
     Parse command line arguments.
 
@@ -233,7 +233,7 @@ Examples:
     return parser.parse_args(args)
 
 
-def parse_range(range_str: str) -> tuple[Optional[float], Optional[float]]:
+def parse_range(range_str: str) -> tuple[float | None, float | None]:
     """
     Parse a Nagios-style range string.
 
@@ -259,7 +259,7 @@ def parse_range(range_str: str) -> tuple[Optional[float], Optional[float]]:
     return low, high
 
 
-def main(args: Optional[list] = None) -> int:
+def main(args: list | None = None) -> int:
     """
     Main entry point for the plugin.
 
