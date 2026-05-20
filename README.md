@@ -187,20 +187,19 @@ pytest
 ### Code Formatting
 
 ```bash
-black check_bitcoin_price tests
-isort check_bitcoin_price tests
+ruff format check_bitcoin_price tests
+```
+
+### Linting
+
+```bash
+ruff check check_bitcoin_price tests
 ```
 
 ### Type Checking
 
 ```bash
 mypy check_bitcoin_price
-```
-
-### Linting
-
-```bash
-flake8 check_bitcoin_price tests
 ```
 
 ## Contributing
