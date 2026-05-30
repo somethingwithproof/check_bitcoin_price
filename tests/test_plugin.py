@@ -33,7 +33,7 @@ class TestBitcoinPriceChecker:
         checker = BitcoinPriceChecker()
         price = checker.get_bitcoin_price()
 
-        assert price == 43521.50
+        assert price == pytest.approx(43521.50)
 
     @responses.activate
     def test_get_bitcoin_price_different_currency(self):
@@ -48,7 +48,7 @@ class TestBitcoinPriceChecker:
         checker = BitcoinPriceChecker(currency="eur")
         price = checker.get_bitcoin_price()
 
-        assert price == 40000.00
+        assert price == pytest.approx(40000.00)
 
     @responses.activate
     def test_get_bitcoin_price_api_error(self):
