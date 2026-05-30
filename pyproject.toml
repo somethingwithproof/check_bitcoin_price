@@ -55,7 +55,7 @@ line-length = 88
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM", "TCH"]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "TCH"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["check_bitcoin_price"]
@@ -79,24 +79,3 @@ exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.:",
 ]
-
-[tool.ruff]
-line-length = 88
-target-version = "py38"
-
-[tool.ruff.lint]
-select = [
-    "E",  # pycodestyle errors
-    "W",  # pycodestyle warnings
-    "F",  # pyflakes
-    "I",  # isort
-    "B",  # flake8-bugbear
-    "C4", # flake8-comprehensions
-    "UP", # pyupgrade
-]
-ignore = [
-    "E501", # line too long, handled by black
-]
-
-[tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401"]
