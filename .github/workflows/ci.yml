@@ -51,3 +51,28 @@ jobs:
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
+
+  sonarcloud:
+    name: SonarCloud
+    runs-on: ubuntu-latest
+    # Skip on PRs from forks, where the SONAR_TOKEN secret is not available.
+    if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          # Full history so SonarCloud can assign issues to the right authors/dates.
+          fetch-depth: 0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Run tests with coverage
+        run: pytest --cov=check_bitcoin_price --cov-report=xml --junitxml=pytest.xml
+      - name: SonarCloud scan
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
