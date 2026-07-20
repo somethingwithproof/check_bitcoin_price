@@ -33,7 +33,7 @@ class TestBitcoinPriceChecker:
         checker = BitcoinPriceChecker()
         price = checker.get_bitcoin_price()
 
-        assert price == pytest.approx(43521.50)
+        assert price == pytest.approx(43521.50, rel=0, abs=0.005)
 
     @responses.activate
     def test_get_bitcoin_price_different_currency(self):
@@ -48,7 +48,7 @@ class TestBitcoinPriceChecker:
         checker = BitcoinPriceChecker(currency="eur")
         price = checker.get_bitcoin_price()
 
-        assert price == pytest.approx(40000.00)
+        assert price == pytest.approx(40000.00, rel=0, abs=0.005)
 
     @responses.activate
     def test_get_bitcoin_price_api_error(self):
@@ -407,7 +407,7 @@ class TestEdgeCases:
         checker = BitcoinPriceChecker()
         price = checker.get_bitcoin_price()
 
-        assert price == pytest.approx(43521.123456789)
+        assert price == pytest.approx(43521.123456789, rel=0, abs=1e-9)
 
     def test_threshold_at_boundary(self):
         """Test price exactly at threshold boundary."""
