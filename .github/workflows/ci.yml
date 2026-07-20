@@ -29,7 +29,8 @@ jobs:
         run: mypy check_bitcoin_price --ignore-missing-imports
 
   test:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
