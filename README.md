@@ -13,6 +13,10 @@ A Nagios/Icinga plugin to monitor Bitcoin price with configurable warning and cr
 - Uses CoinGecko API (free, no API key required)
 - Support for custom API endpoints
 - Configurable timeout
+- Quote freshness checks using vendor timestamps
+- Bounded retries for rate limits and temporary API failures
+- Optional alerts on absolute 24-hour percentage movement
+- Price thresholds, request duration, and quote age in performance data
 
 ## Installation
 
@@ -43,10 +47,10 @@ pip install -e ".[dev]"
 ### Basic Usage
 
 ```bash
-# Check Bitcoin price (no thresholds - always returns OK)
+# Check Bitcoin price (valid quotes return OK when no thresholds are set)
 check_bitcoin_price
 
-# Output: OK - Bitcoin price is 43521.00 USD | bitcoin_price=43521.00
+# Output: OK - Bitcoin price is 43521.00 USD | bitcoin_price=43521.00;;;0; request_time=0.125s;;;0;
 ```
 
 ### With Thresholds
@@ -80,9 +84,43 @@ check_bitcoin_price --currency gbp
 ### Custom Timeout
 
 ```bash
-# Set timeout to 30 seconds
+# Set a total 30-second budget for requests and retries
 check_bitcoin_price --timeout 30
 ```
+
+### Freshness and Retry Budget
+
+```bash
+# Require a quote no older than five minutes; allow two retries within ten seconds
+check_bitcoin_price --max-age 300 --timeout 10 --retries 2
+```
+
+Freshness is opt-in for compatibility with custom endpoints that return only a
+price. With `--max-age`, missing, invalid, future, or stale vendor timestamps
+return `UNKNOWN`; the plugin does not substitute the local fetch time for the
+vendor's quote time. A timestamp exactly at the age limit remains acceptable.
+
+The default allows one retry. Only connection errors, timeouts, and HTTP
+408/429/500/502/503/504 responses are retried. Backoff starts at 0.5 seconds and
+doubles for subsequent retries; `Retry-After` seconds and HTTP dates take
+precedence. All attempts, response reads, JSON decoding, and retry waits share
+the `--timeout` budget. A retry wait that cannot fit returns `UNKNOWN` immediately.
+Authentication failures, other permanent HTTP errors, and invalid JSON are not
+retried. Use `--retries 0` to disable retries.
+
+### Daily Percentage Movement
+
+```bash
+# Warn on a daily move greater than 5%; critical above 10%, in either direction
+check_bitcoin_price --warning-change 5 --critical-change 10 --max-age 300
+```
+
+Change thresholds measure the absolute value of CoinGecko's signed 24-hour
+percentage change in the selected currency. A change exactly at a threshold does
+not alert. If both thresholds are supplied, warning must not exceed critical.
+Missing or invalid required change data returns `UNKNOWN`. Price and change
+alerts can be combined; the highest severity wins, with price taking precedence
+when severities match.
 
 ## Command Line Options
 
@@ -95,7 +133,11 @@ check_bitcoin_price --timeout 30
 | `--critical-low` | Critical threshold for low price |
 | `--critical-high` | Critical threshold for high price |
 | `--currency` | Currency to check price in (default: usd) |
-| `--timeout` | API request timeout in seconds (default: 10) |
+| `--timeout` | Total API request/retry budget in seconds, including fractional values (default: 10) |
+| `--retries` | Additional transient attempts, 0–5 (default: 1) |
+| `--max-age` | Maximum vendor quote age in seconds; disabled by default |
+| `--warning-change` | Warning limit for absolute 24-hour percentage movement |
+| `--critical-change` | Critical limit for absolute 24-hour percentage movement |
 | `--api-url` | Custom API URL |
 | `-v`, `--verbose` | Enable verbose output |
 | `-V`, `--version` | Show version |
@@ -172,14 +214,24 @@ so stdout contains a single monitoring status line.
 The plugin outputs performance data in standard Nagios format:
 
 ```
-bitcoin_price=43521.00
+bitcoin_price=43521.00;30000:50000;25000:60000;0; request_time=0.125s;;;0; price_age=20.000s;;;0; bitcoin_change_24h=-6.00%;-5:5;-10:10;;
 ```
 
-This can be used with graphing tools like PNP4Nagios, Grafana, or InfluxDB.
+Price performance data now includes the configured warning/critical ranges and
+a minimum of zero. Request time includes all attempts and backoff. Quote age is
+emitted only when the vendor supplies a valid timestamp; daily change is emitted
+when available. Change ranges are symmetric around zero. Invalid or stale data
+produces `UNKNOWN` without price performance data. These metrics can be used with
+graphing tools like PNP4Nagios, Grafana, or InfluxDB.
 
 ## API
 
 This plugin uses the [CoinGecko API](https://www.coingecko.com/en/api) by default, which is free and doesn't require an API key. Rate limits apply.
+
+Custom endpoints must use the same response shape: `bitcoin.<currency>` for
+price, `bitcoin.last_updated_at` for UNIX timestamp seconds, and
+`bitcoin.<currency>_24h_change` for signed daily percentage movement. Only price
+is required when freshness and movement alerts are disabled.
 
 Supported currencies include: usd, eur, gbp, jpy, aud, cad, chf, cny, and many more.
 
