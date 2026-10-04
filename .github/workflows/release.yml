@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing stable SemVer tag (vMAJOR.MINOR.PATCH)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    outputs:
+      commit: ${{ steps.verify.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          version: "2026.10.2"
+      - name: Verify stable version and main ancestry
+        id: verify
+        run: |
+          mise exec -- python -m scripts.validate_release
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          git merge-base --is-ancestor HEAD origin/main
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Check code and run tests
+        run: |
+          mise run check
+          mise run test
+          mise run audit
+      - name: Build release assets
+        run: mise run package
+      - name: Test native package installation
+        run: bash scripts/test_native_packages.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-assets
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      RELEASE_COMMIT: ${{ needs.build.outputs.commit }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-assets
+          path: dist
+      - name: Publish tested assets with generated release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)" = "$RELEASE_COMMIT"
+          cd dist
+          sha256sum --check SHA256SUMS
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft > draft-state; then
+            # Published assets remain immutable. Only unfinished drafts can resume.
+            test "$(cat draft-state)" = "true"
+            gh release upload "$RELEASE_TAG" ./*.deb ./*.rpm ./*.whl ./*.tar.gz SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" ./*.deb ./*.rpm ./*.whl ./*.tar.gz SHA256SUMS \
+              --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
+              --title "$RELEASE_TAG" --generate-notes
+          fi
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest

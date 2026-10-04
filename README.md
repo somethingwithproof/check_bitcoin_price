@@ -27,6 +27,23 @@ A Nagios/Icinga plugin to monitor Bitcoin price with configurable warning and cr
 pip install check-bitcoin-price
 ```
 
+### From GitHub Releases
+
+Download `.deb`, `.rpm`, `.tar.gz`, wheel, and `SHA256SUMS` files from [GitHub Releases](https://github.com/somethingwithproof/check_bitcoin_price/releases). Verify a download with `sha256sum --ignore-missing --check SHA256SUMS`.
+
+```bash
+# Debian/Ubuntu with Python >=3.12 (for example Ubuntu 24.04)
+sudo apt install ./check-bitcoin-price_1.0.0-1_all.deb
+
+# Fedora or another RPM distribution with Python >=3.12
+sudo dnf install ./check-bitcoin-price-1.0.0-1.noarch.rpm
+
+# Python source archive
+pip install ./check_bitcoin_price-1.0.0.tar.gz
+```
+
+Use the filenames from the selected release. Native packages install `/usr/bin/check_bitcoin_price` and `/usr/lib/nagios/plugins/check_bitcoin_price`; the system package manager resolves Python and `requests` dependencies. They contain architecture-independent Python code and require a distribution providing Python 3.12 or newer.
+
 ### From Source
 
 ```bash
@@ -247,6 +264,7 @@ mise run check   # lockfile, formatting, lint, and types
 mise run test    # unit tests, installed CLI tests, and >=98% branch-aware coverage
 mise run audit   # Bandit and locked runtime dependency audit
 mise run build   # wheel, source distribution, and strict metadata validation
+mise run package # also build .deb, .rpm, and SHA256SUMS
 mise run format
 ```
 
@@ -261,7 +279,7 @@ Use `mise exec -- uv add --dev <tool>` or `mise exec -- uv add <dependency>` to 
 
 CI checks Python 3.12 and 3.13 on Linux and Python 3.13 on macOS. Every PR also runs package validation, dependency auditing, and CodeQL. Built distributions are available as the `distributions` artifact on CI runs.
 
-The package and CLI version comes from `check_bitcoin_price/__init__.py`. Update that value before a release and build with `mise run build`. Distribution uploads are a separate release step.
+The package and CLI version comes from `check_bitcoin_price/__init__.py`. See [the release process](CONTRIBUTING.md#releases) for version bumps and automated publication of GitHub release assets.
 
 ## Contributing
 
