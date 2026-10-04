@@ -444,10 +444,11 @@ class TestMain:
 
         assert main(["--verbose"]) == OK
         output = capsys.readouterr()
-        assert (
-            output.out
-            == "OK - Bitcoin price is 40000.00 USD | bitcoin_price=40000.00\n"
+        assert output.out.startswith(
+            "OK - Bitcoin price is 40000.00 USD | bitcoin_price=40000.00;;;0; "
         )
+        assert "request_time=" in output.out
+        assert len(output.out.splitlines()) == 1
         assert "Fetching Bitcoin price" in output.err
 
     @pytest.mark.parametrize("args", [["--help"], ["--version"]])

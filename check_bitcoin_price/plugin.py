@@ -9,9 +9,13 @@ and returns appropriate Nagios status codes based on configured thresholds.
 import argparse
 import math
 import sys
+import time
 from typing import NamedTuple, Never
 
 import requests
+
+from check_bitcoin_price.quotes import PriceQuote, parse_price, parse_quote
+from check_bitcoin_price.transport import fetch_json
 
 # Nagios exit codes
 OK = 0
@@ -45,20 +49,6 @@ def validate_thresholds(low: float | None, high: float | None) -> None:
         raise ConfigurationError("Low threshold must not exceed high threshold")
 
 
-def parse_price(price: object) -> float:
-    """Normalize a price without allowing invalid data to report OK."""
-    message = "Bitcoin price must be a finite, nonnegative number"
-    if isinstance(price, bool) or not isinstance(price, (int, float, str)):
-        raise ValueError(message)
-    try:
-        value = float(price)
-    except (ValueError, OverflowError) as exc:
-        raise ValueError(message) from exc
-    if not math.isfinite(value) or value < 0:
-        raise ValueError(message)
-    return value
-
-
 class ThresholdResult(NamedTuple):
     """Result of threshold check."""
 
@@ -72,8 +62,10 @@ class BitcoinPriceChecker:
     def __init__(
         self,
         api_url: str = DEFAULT_API_URL,
-        timeout: int = DEFAULT_TIMEOUT,
+        timeout: float = DEFAULT_TIMEOUT,
         currency: str = DEFAULT_CURRENCY,
+        retries: int = 1,
+        max_age: float | None = None,
     ):
         """
         Initialize the Bitcoin price checker.
@@ -84,10 +76,16 @@ class BitcoinPriceChecker:
             currency: Currency to check price in (e.g., usd, eur, gbp)
         """
         self.api_url = api_url
-        if timeout <= 0:
-            raise ConfigurationError("Timeout must be greater than zero")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ConfigurationError("Timeout must be finite and greater than zero")
+        if not 0 <= retries <= 5:
+            raise ConfigurationError("Retries must be between zero and five")
+        if max_age is not None and (not math.isfinite(max_age) or max_age <= 0):
+            raise ConfigurationError("Maximum age must be finite and greater than zero")
         self.timeout = timeout
         self.currency = currency.lower()
+        self.retries = retries
+        self.max_age = max_age
 
     def get_bitcoin_price(self) -> float:
         """
@@ -101,20 +99,26 @@ class BitcoinPriceChecker:
             KeyError: If response format is unexpected
             ValueError: If price cannot be parsed
         """
-        params = {"ids": "bitcoin", "vs_currencies": self.currency}
+        return self.get_quote().price
 
-        response = requests.get(
-            self.api_url,
-            params=params,
-            timeout=self.timeout,
-            headers={"Accept": "application/json"},
+    def get_quote(self, require_change: bool = False) -> PriceQuote:
+        """Retrieve a quote under a single deadline, including retries."""
+        params = {
+            "ids": "bitcoin",
+            "vs_currencies": self.currency,
+            "include_last_updated_at": "true",
+        }
+        if require_change:
+            params["include_24hr_change"] = "true"
+        started = time.monotonic()
+        data = fetch_json(self.api_url, params, self.timeout, self.retries)
+        return parse_quote(
+            data,
+            self.currency,
+            time.monotonic() - started,
+            self.max_age,
+            require_change,
         )
-        response.raise_for_status()
-
-        data = response.json()
-        if not isinstance(data, dict) or not isinstance(data.get("bitcoin"), dict):
-            raise ValueError("Expected a Bitcoin price object")
-        return parse_price(data["bitcoin"][self.currency])
 
     def check_thresholds(
         self,
@@ -180,7 +184,7 @@ def parse_args(args: list | None = None) -> argparse.Namespace:
         epilog="""
 Examples:
   %(prog)s
-    Check Bitcoin price without thresholds (always returns OK)
+    Check Bitcoin price without thresholds (valid quotes return OK)
 
   %(prog)s -w 30000:50000 -c 25000:60000
     Warning if price is below 30000 or above 50000
@@ -234,9 +238,27 @@ Examples:
     )
     parser.add_argument(
         "--timeout",
-        type=int,
+        type=float,
         default=DEFAULT_TIMEOUT,
-        help=f"API request timeout in seconds (default: {DEFAULT_TIMEOUT})",
+        help=f"Total request/retry deadline in seconds (default: {DEFAULT_TIMEOUT})",
+    )
+    parser.add_argument(
+        "--retries", type=int, default=1, help="Transient retries (0-5; default: 1)"
+    )
+    parser.add_argument(
+        "--max-age",
+        type=float,
+        help="Maximum quote age in seconds; require vendor timestamp",
+    )
+    parser.add_argument(
+        "--warning-change",
+        type=float,
+        help="Warn when absolute 24-hour change exceeds this percentage",
+    )
+    parser.add_argument(
+        "--critical-change",
+        type=float,
+        help="Critical when absolute 24-hour change exceeds this percentage",
     )
     parser.add_argument(
         "--api-url",
@@ -302,6 +324,103 @@ def resolve_thresholds(
     return low, high
 
 
+def check_change(
+    change: float | None, warning: float | None, critical: float | None
+) -> ThresholdResult:
+    """Alert on the magnitude of signed daily movement."""
+    for status, label, limit in (
+        (CRITICAL, "CRITICAL", critical),
+        (WARNING, "WARNING", warning),
+    ):
+        if change is not None and limit is not None and abs(change) > limit:
+            return ThresholdResult(
+                status,
+                f"{label} - Bitcoin 24-hour change {change:+.2f}% exceeds "
+                f"{label.lower()} limit {limit:g}%",
+            )
+    return ThresholdResult(OK, "OK")
+
+
+def performance_range(low: float | None, high: float | None) -> str:
+    """Represent existing price bounds using Nagios range syntax."""
+    if low is None and high is None:
+        return ""
+    upper = f"{high:g}" if high is not None else ""
+    return f"{low if low is not None else 0:g}:{upper}"
+
+
+def performance_data(
+    quote: PriceQuote,
+    warning: tuple[float | None, float | None],
+    critical: tuple[float | None, float | None],
+    warning_change: float | None,
+    critical_change: float | None,
+) -> str:
+    """Expose price bounds, request time, quote age, and daily-change ranges."""
+    metrics = [
+        f"bitcoin_price={quote.price:.2f};{performance_range(*warning)};"
+        f"{performance_range(*critical)};0;",
+        f"request_time={quote.request_seconds:.3f}s;;;0;",
+    ]
+    if quote.age_seconds is not None:
+        metrics.append(f"price_age={quote.age_seconds:.3f}s;;;0;")
+    if quote.change_24h is not None:
+        change_warning = (
+            f"{-warning_change:g}:{warning_change:g}"
+            if warning_change is not None
+            else ""
+        )
+        change_critical = (
+            f"{-critical_change:g}:{critical_change:g}"
+            if critical_change is not None
+            else ""
+        )
+        metrics.append(
+            f"bitcoin_change_24h={quote.change_24h:.2f}%;{change_warning};{change_critical};;"
+        )
+    return " ".join(metrics)
+
+
+def run_check(parsed_args: argparse.Namespace) -> ThresholdResult:
+    """Validate configuration, fetch once, and evaluate all requested metrics."""
+    warning = resolve_thresholds(
+        parsed_args.warning, parsed_args.warning_low, parsed_args.warning_high
+    )
+    critical = resolve_thresholds(
+        parsed_args.critical, parsed_args.critical_low, parsed_args.critical_high
+    )
+    validate_thresholds(parsed_args.warning_change, parsed_args.critical_change)
+    checker = BitcoinPriceChecker(
+        api_url=parsed_args.api_url,
+        timeout=parsed_args.timeout,
+        currency=parsed_args.currency,
+        retries=parsed_args.retries,
+        max_age=parsed_args.max_age,
+    )
+    if parsed_args.verbose:
+        print("Fetching Bitcoin price...", file=sys.stderr)
+    require_change = (
+        parsed_args.warning_change is not None
+        or parsed_args.critical_change is not None
+    )
+    quote = checker.get_quote(require_change)
+    price_result = checker.check_thresholds(quote.price, *warning, *critical)
+    change_result = check_change(
+        quote.change_24h, parsed_args.warning_change, parsed_args.critical_change
+    )
+    result = (
+        change_result if change_result.status > price_result.status else price_result
+    )
+    perfdata = performance_data(
+        quote,
+        warning,
+        critical,
+        parsed_args.warning_change,
+        parsed_args.critical_change,
+    )
+    return ThresholdResult(result.status, f"{result.message} | {perfdata}")
+
+
 def main(args: list | None = None) -> int:
     """
     Main entry point for the plugin.
@@ -313,40 +432,8 @@ def main(args: list | None = None) -> int:
         Nagios exit code
     """
     try:
-        parsed_args = parse_args(args)
-
-        warning_low, warning_high = resolve_thresholds(
-            parsed_args.warning, parsed_args.warning_low, parsed_args.warning_high
-        )
-        critical_low, critical_high = resolve_thresholds(
-            parsed_args.critical, parsed_args.critical_low, parsed_args.critical_high
-        )
-
-        # Create checker and get price
-        checker = BitcoinPriceChecker(
-            api_url=parsed_args.api_url,
-            timeout=parsed_args.timeout,
-            currency=parsed_args.currency,
-        )
-
-        if parsed_args.verbose:
-            print("Fetching Bitcoin price...", file=sys.stderr)
-
-        price = checker.get_bitcoin_price()
-
-        # Check thresholds
-        result = checker.check_thresholds(
-            price=price,
-            warning_low=warning_low,
-            warning_high=warning_high,
-            critical_low=critical_low,
-            critical_high=critical_high,
-        )
-
-        # Output with performance data
-        perfdata = f"bitcoin_price={price:.2f}"
-        print(f"{result.message} | {perfdata}")
-
+        result = run_check(parse_args(args))
+        print(result.message)
         return result.status
 
     except ConfigurationError as e:
@@ -356,7 +443,13 @@ def main(args: list | None = None) -> int:
         print("UNKNOWN - API request timed out")
         return UNKNOWN
     except requests.RequestException as e:
-        print(f"UNKNOWN - API request failed: {e}")
+        detail = (
+            f"HTTP {e.response.status_code}"
+            if e.response is not None
+            else type(e).__name__
+        )
+        # Exception strings may contain credentials embedded in a custom URL.
+        print(f"UNKNOWN - API request failed: {detail}")
         return UNKNOWN
     except (KeyError, ValueError) as e:
         print(f"UNKNOWN - Failed to parse API response: {e}")
