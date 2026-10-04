@@ -4,6 +4,7 @@ A Nagios/Icinga plugin to monitor Bitcoin price with configurable warning and cr
 
 [![Python Version](https://img.shields.io/pypi/pyversions/check-bitcoin-price.svg)](https://pypi.org/project/check-bitcoin-price/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![CI](https://github.com/somethingwithproof/check_bitcoin_price/actions/workflows/ci.yml/badge.svg)](https://github.com/somethingwithproof/check_bitcoin_price/actions/workflows/ci.yml)
 
 ## Features
 
@@ -29,7 +30,7 @@ pip install check-bitcoin-price
 ### From Source
 
 ```bash
-git clone https://github.com/thomasvincent/check_bitcoin_price.git
+git clone https://github.com/somethingwithproof/check_bitcoin_price.git
 cd check_bitcoin_price
 pip install .
 ```
@@ -37,9 +38,11 @@ pip install .
 ### For Development
 
 ```bash
-git clone https://github.com/thomasvincent/check_bitcoin_price.git
+git clone https://github.com/somethingwithproof/check_bitcoin_price.git
 cd check_bitcoin_price
-pip install -e ".[dev]"
+mise trust
+mise install
+mise run setup
 ```
 
 ## Usage
@@ -237,39 +240,32 @@ Supported currencies include: usd, eur, gbp, jpy, aud, cad, chf, cny, and many m
 
 ## Development
 
-### Running Tests
+Install [mise](https://mise.jdx.dev/getting-started.html), then run the development setup above. `mise.toml` pins Python and uv. Development tools are declared in `pyproject.toml` and resolved in the committed `uv.lock`.
 
 ```bash
-pytest
+mise run check   # lockfile, formatting, lint, and types
+mise run test    # unit tests, installed CLI tests, and >=98% branch-aware coverage
+mise run audit   # Bandit and locked runtime dependency audit
+mise run build   # wheel, source distribution, and strict metadata validation
+mise run format
 ```
 
-### Code Formatting
+Install the commit hooks after setup:
 
 ```bash
-ruff format check_bitcoin_price tests
+mise exec -- uv run --frozen --no-sync --no-build pre-commit install
+mise exec -- uv run --frozen --no-sync --no-build pre-commit run --all-files
 ```
 
-### Linting
+Use `mise exec -- uv add --dev <tool>` or `mise exec -- uv add <dependency>` to update dependencies and commit both `pyproject.toml` and `uv.lock`.
 
-```bash
-ruff check check_bitcoin_price tests
-```
+CI checks Python 3.12 and 3.13 on Linux and Python 3.13 on macOS. Every PR also runs package validation, dependency auditing, and CodeQL. Built distributions are available as the `distributions` artifact on CI runs.
 
-### Type Checking
-
-```bash
-mypy check_bitcoin_price
-```
+The package and CLI version comes from `check_bitcoin_price/__init__.py`. Update that value before a release and build with `mise run build`. Distribution uploads are a separate release step.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and signed-off commit requirements.
 
 ## License
 

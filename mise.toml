@@ -1,0 +1,44 @@
+[tools]
+python = "3.12.12"
+uv = "0.10.6"
+
+[tasks.setup]
+description = "Install locked development dependencies"
+run = "uv sync --frozen --group dev --no-build --no-install-project"
+
+[tasks.check]
+description = "Check lockfile, formatting, lint, and types"
+depends = ["setup"]
+run = [
+  "uv lock --check",
+  "uv run --frozen --no-sync --no-build ruff format --check check_bitcoin_price tests",
+  "uv run --frozen --no-sync --no-build ruff check check_bitcoin_price tests",
+  "uv run --frozen --no-sync --no-build mypy check_bitcoin_price",
+]
+
+[tasks.test]
+description = "Run tests including the installed CLI and coverage gate"
+depends = ["setup"]
+run = "uv run --frozen --no-sync --no-build pytest"
+
+[tasks.format]
+description = "Format Python code"
+depends = ["setup"]
+run = "uv run --frozen --no-sync --no-build ruff format check_bitcoin_price tests"
+
+[tasks.build]
+description = "Build and validate wheel and source distribution"
+depends = ["setup"]
+run = [
+  "uv build --no-build-isolation",
+  "uv run --frozen --no-sync --no-build twine check --strict dist/*",
+]
+
+[tasks.audit]
+description = "Scan source and audit locked runtime dependencies"
+depends = ["setup"]
+run = [
+  "uv run --frozen --no-sync --no-build bandit -c pyproject.toml -r check_bitcoin_price",
+  "uv export --quiet --frozen --no-dev --no-emit-project --output-file .audit-requirements.txt",
+  "uv run --frozen --no-sync --no-build pip-audit --disable-pip --require-hashes -r .audit-requirements.txt",
+]

@@ -18,6 +18,7 @@ concurrency:
 jobs:
   merge:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Merge Dependabot pull requests with successful checks
         shell: bash
@@ -30,29 +31,30 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --state open \
             --author "app/dependabot" \
-            --json number,isDraft,mergeable \
+            --json number,isDraft,mergeable,headRefOid \
             --jq '.[] |
               select(.isDraft == false and .mergeable == "MERGEABLE") |
-              .number' |
-          while read -r pr; do
+              "\(.number) \(.headRefOid)"' |
+          while read -r pr head_sha; do
             [ -n "$pr" ] || continue
 
-            states=$(gh pr checks "$pr" \
+            if ! states=$(gh pr checks "$pr" \
               --repo "$GITHUB_REPOSITORY" \
-              --json state \
-              --jq '.[].state' 2>/dev/null || true)
+              --json bucket \
+              --jq '.[].bucket'); then
+              continue
+            fi
 
             # Fail closed when a repository has no CI checks.
             [ -n "$states" ] || continue
 
-            blocked='^(PENDING|QUEUED|IN_PROGRESS|FAILURE|ERROR|CANCELLED|'
-            blocked+='STALE|ACTION_REQUIRED)$'
-            if grep -Eq "$blocked" <<<"$states"; then
+            if grep -Evq '^(pass|skipping)$' <<<"$states"; then
               continue
             fi
 
             gh pr merge "$pr" \
               --repo "$GITHUB_REPOSITORY" \
               --squash \
-              --delete-branch
+              --delete-branch \
+              --match-head-commit "$head_sha"
           done

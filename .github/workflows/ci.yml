@@ -2,9 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   pull_request:
-    branches: [main, master]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -12,6 +17,7 @@ permissions:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
@@ -21,7 +27,7 @@ jobs:
         with:
           version: "0.10.6"
       - name: Install locked binary dependencies
-        run: uv sync --frozen --all-extras --no-build --no-install-project
+        run: uv sync --frozen --group dev --no-build --no-install-project
       - name: Check lockfile
         run: uv lock --check
       - name: Check formatting
@@ -29,15 +35,19 @@ jobs:
       - name: Lint
         run: .venv/bin/python -m ruff check check_bitcoin_price tests
       - name: Type check
-        run: .venv/bin/python -m mypy check_bitcoin_price --ignore-missing-imports
+        run: .venv/bin/python -m mypy check_bitcoin_price
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13"]
+        os: [ubuntu-latest]
+        include:
+          - os: macos-latest
+            python-version: "3.13"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
@@ -47,14 +57,68 @@ jobs:
         with:
           version: "0.10.6"
       - name: Install locked binary dependencies
-        run: uv sync --frozen --all-extras --no-build --no-install-project
+        run: uv sync --frozen --group dev --no-build --no-install-project
       - name: Check lockfile
         run: uv lock --check
       - name: Run tests
         run: .venv/bin/python -m pytest --cov=check_bitcoin_price --cov-report=xml
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5
-        if: matrix.python-version == '3.12'
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
+
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: "0.10.6"
+      - name: Install locked binary dependencies
+        run: uv sync --frozen --group dev --no-build --no-install-project
+      - name: Build distributions with the locked backend
+        run: uv build --no-build-isolation
+      - name: Validate package metadata
+        run: .venv/bin/python -m twine check --strict dist/*
+      - name: Verify installed wheel outside the source tree
+        run: |
+          uv venv "$RUNNER_TEMP/package-smoke"
+          uv pip install --python "$RUNNER_TEMP/package-smoke/bin/python" --no-deps --no-build dist/*.whl
+          uv export --quiet --frozen --no-dev --no-emit-project --output-file "$RUNNER_TEMP/runtime-requirements.txt"
+          uv pip install --python "$RUNNER_TEMP/package-smoke/bin/python" --no-build --require-hashes -r "$RUNNER_TEMP/runtime-requirements.txt"
+          cd "$RUNNER_TEMP"
+          package-smoke/bin/check_bitcoin_price --version
+          package-smoke/bin/check_bitcoin_price --help
+      - name: Upload distributions
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: distributions
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: "0.10.6"
+      - name: Install locked binary dependencies
+        run: uv sync --frozen --group dev --no-build --no-install-project
+      - name: Scan Python source
+        run: .venv/bin/python -m bandit -c pyproject.toml -r check_bitcoin_price
+      - name: Audit locked runtime dependencies
+        run: |
+          uv export --quiet --frozen --no-dev --no-emit-project --output-file "$RUNNER_TEMP/runtime-requirements.txt"
+          .venv/bin/python -m pip_audit --disable-pip --require-hashes -r "$RUNNER_TEMP/runtime-requirements.txt"
