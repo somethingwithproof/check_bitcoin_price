@@ -1,0 +1,41 @@
+name: check-bitcoin-price
+arch: all
+platform: linux
+version: ${PACKAGE_VERSION}
+release: 1
+section: net
+priority: optional
+maintainer: Thomas Vincent <thomasvincent@gmail.com>
+description: Nagios/Icinga plugin for Bitcoin price, quote freshness, and daily movement
+homepage: https://github.com/somethingwithproof/check_bitcoin_price
+license: MIT
+contents:
+  - src: check_bitcoin_price/*.py
+    dst: /usr/share/check-bitcoin-price/check_bitcoin_price/
+    file_info:
+      mode: 0644
+  - src: check_bitcoin_price/py.typed
+    dst: /usr/share/check-bitcoin-price/check_bitcoin_price/py.typed
+    file_info:
+      mode: 0644
+  - src: packaging/check_bitcoin_price
+    dst: /usr/bin/check_bitcoin_price
+    file_info:
+      mode: 0755
+  - src: /usr/bin/check_bitcoin_price
+    dst: /usr/lib/nagios/plugins/check_bitcoin_price
+    type: symlink
+  - src: LICENSE
+    dst: /usr/share/licenses/check-bitcoin-price/LICENSE
+    type: license
+  - src: README.md
+    dst: /usr/share/doc/check-bitcoin-price/README.md
+overrides:
+  deb:
+    depends:
+      - python3 (>= 3.12)
+      - python3-requests (>= 2.25.0)
+  rpm:
+    depends:
+      - python3 >= 3.12
+      - python3-requests >= 2.25.0

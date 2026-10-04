@@ -29,7 +29,7 @@ repos:
         types_or: [python, pyi]
       - id: mypy
         name: Mypy (locked)
-        entry: mise exec -- uv run --frozen --no-sync --no-build mypy check_bitcoin_price
+        entry: mise exec -- uv run --frozen --no-sync --no-build mypy check_bitcoin_price scripts
         language: system
         types_or: [python, pyi]
         pass_filenames: false

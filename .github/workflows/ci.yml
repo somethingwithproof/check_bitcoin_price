@@ -31,11 +31,11 @@ jobs:
       - name: Check lockfile
         run: uv lock --check
       - name: Check formatting
-        run: .venv/bin/python -m ruff format --check check_bitcoin_price tests
+        run: .venv/bin/python -m ruff format --check check_bitcoin_price tests scripts
       - name: Lint
-        run: .venv/bin/python -m ruff check check_bitcoin_price tests
+        run: .venv/bin/python -m ruff check check_bitcoin_price tests scripts
       - name: Type check
-        run: .venv/bin/python -m mypy check_bitcoin_price
+        run: .venv/bin/python -m mypy check_bitcoin_price scripts
 
   test:
     runs-on: ${{ matrix.os }}
@@ -83,7 +83,7 @@ jobs:
       - name: Install locked binary dependencies
         run: uv sync --frozen --group dev --no-build --no-install-project
       - name: Build distributions with the locked backend
-        run: uv build --no-build-isolation
+        run: uv build --clear --no-build-isolation
       - name: Validate package metadata
         run: .venv/bin/python -m twine check --strict dist/*
       - name: Verify installed wheel outside the source tree
@@ -117,8 +117,21 @@ jobs:
       - name: Install locked binary dependencies
         run: uv sync --frozen --group dev --no-build --no-install-project
       - name: Scan Python source
-        run: .venv/bin/python -m bandit -c pyproject.toml -r check_bitcoin_price
+        run: .venv/bin/python -m bandit -c pyproject.toml -r check_bitcoin_price scripts
       - name: Audit locked runtime dependencies
         run: |
           uv export --quiet --frozen --no-dev --no-emit-project --output-file "$RUNNER_TEMP/runtime-requirements.txt"
           .venv/bin/python -m pip_audit --disable-pip --require-hashes -r "$RUNNER_TEMP/runtime-requirements.txt"
+
+  native-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          version: "2026.10.2"
+      - name: Build native packages and checksums
+        run: mise run package
+      - name: Test Debian and RPM installation
+        run: bash scripts/test_native_packages.sh

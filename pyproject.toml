@@ -56,7 +56,7 @@ Issues = "https://github.com/somethingwithproof/check_bitcoin_price/issues"
 path = "check_bitcoin_price/__init__.py"
 
 [tool.hatch.build.targets.sdist]
-include = ["/check_bitcoin_price", "/tests", "/README.md", "/LICENSE", "/pyproject.toml", "/uv.lock"]
+include = ["/check_bitcoin_price", "/tests", "/scripts", "/packaging", "/mise.toml", "/CONTRIBUTING.md", "/README.md", "/LICENSE", "/pyproject.toml", "/uv.lock"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["check_bitcoin_price"]
