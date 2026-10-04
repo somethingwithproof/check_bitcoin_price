@@ -167,6 +167,13 @@ class TestBitcoinPriceChecker:
         )
         assert result.status == WARNING
 
+    def test_critical_takes_precedence_over_overlapping_warning(self):
+        result = BitcoinPriceChecker().check_thresholds(
+            price=55000, warning_low=60000, critical_high=50000
+        )
+        assert result.status == CRITICAL
+        assert "above critical threshold" in result.message
+
 
 class TestParseArgs:
     """Tests for argument parsing."""
@@ -346,6 +353,18 @@ class TestMain:
         captured = capsys.readouterr()
         assert "WARNING" in captured.out
         assert "above" in captured.out
+
+    @pytest.mark.parametrize(
+        "args, expected",
+        [
+            (["-w", "30000:50000", "--warning-high", "35000"], OK),
+            (["-w", "30000:", "--warning-high", "35000"], WARNING),
+        ],
+    )
+    @responses.activate
+    def test_range_bound_precedence_and_individual_fallback(self, args, expected):
+        responses.add(responses.GET, DEFAULT_API_URL, json={"bitcoin": {"usd": 40000}})
+        assert main(args) == expected
 
     @responses.activate
     def test_main_performance_data(self, capsys):
