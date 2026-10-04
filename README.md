@@ -153,6 +153,13 @@ object Service "bitcoin-price" {
 
 ## Exit Codes
 
+Invalid arguments, nonpositive timeouts, invalid threshold ranges, and malformed
+API prices return `UNKNOWN` (exit 3). Thresholds must be finite, nonnegative
+numbers, with each low bound no greater than its high bound. Invalid configuration
+is rejected before contacting the API. Prices must be finite and nonnegative;
+invalid responses do not emit performance data. Verbose diagnostics go to stderr
+so stdout contains a single monitoring status line.
+
 | Code | Status | Description |
 |------|--------|-------------|
 | 0 | OK | Price is within acceptable range |
