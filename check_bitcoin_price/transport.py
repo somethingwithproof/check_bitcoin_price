@@ -9,6 +9,7 @@ from threading import Thread
 import requests
 
 RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
+TIMEOUT_MESSAGE = "Total timeout expired"
 
 
 def retry_delay(response: requests.Response | None, attempt: int) -> float:
@@ -34,7 +35,7 @@ def fetch_with_retries(
     for attempt in range(retries + 1):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise requests.Timeout("Total timeout expired")
+            raise requests.Timeout(TIMEOUT_MESSAGE)
         try:
             with requests.get(
                 url,
@@ -54,7 +55,7 @@ def fetch_with_retries(
         if delay >= deadline - time.monotonic():
             raise requests.Timeout("Retry delay exceeds the total timeout")
         time.sleep(delay)
-    raise requests.Timeout("Total timeout expired")  # pragma: no cover
+    raise requests.Timeout(TIMEOUT_MESSAGE)  # pragma: no cover
 
 
 def fetch_json(
@@ -80,9 +81,9 @@ def fetch_json(
     try:
         result = results.get(timeout=max(0.0, deadline - time.monotonic()))
     except Empty as exc:
-        raise requests.Timeout("Total timeout expired") from exc
+        raise requests.Timeout(TIMEOUT_MESSAGE) from exc
     if time.monotonic() >= deadline:
-        raise requests.Timeout("Total timeout expired")
+        raise requests.Timeout(TIMEOUT_MESSAGE)
     if isinstance(result, Exception):
         raise result
     return result

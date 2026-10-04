@@ -258,8 +258,9 @@ def test_blocked_transport_respects_total_deadline(monkeypatch):
 
 
 def test_expired_budget_never_starts_a_request():
+    expired_at = time.monotonic() - 1
     with pytest.raises(requests.Timeout, match="Total timeout expired"):
-        transport.fetch_with_retries(DEFAULT_API_URL, {}, time.monotonic() - 1, 1)
+        transport.fetch_with_retries(DEFAULT_API_URL, {}, expired_at, 1)
 
 
 @pytest.mark.parametrize(
