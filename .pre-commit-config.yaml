@@ -1,3 +1,4 @@
+minimum_pre_commit_version: "4.0.0"
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -14,33 +15,30 @@ repos:
       - id: check-ast
       - id: debug-statements
 
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.5
+  - repo: local
     hooks:
       - id: ruff
-        args: [--fix]
+        name: Ruff (locked)
+        entry: mise exec -- uv run --frozen --no-sync --no-build ruff check --fix
+        language: system
+        types_or: [python, pyi]
       - id: ruff-format
-
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.19.1
-    hooks:
+        name: Ruff format (locked)
+        entry: mise exec -- uv run --frozen --no-sync --no-build ruff format
+        language: system
+        types_or: [python, pyi]
       - id: mypy
-        args: [--ignore-missing-imports]
-        exclude: ^tests/
-        additional_dependencies: ['types-requests']
-
-  - repo: https://github.com/PyCQA/bandit
-    rev: 1.9.4
-    hooks:
-      - id: bandit
-        args: ['-c', 'pyproject.toml']
-        exclude: ^tests/
-        additional_dependencies: ['bandit[toml]']
-
-  - repo: https://github.com/pypa/pip-audit
-    rev: v2.10.0
-    hooks:
-      - id: pip-audit
+        name: Mypy (locked)
+        entry: mise exec -- uv run --frozen --no-sync --no-build mypy check_bitcoin_price
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false
+      - id: security-audit
+        name: Source and dependency audit (locked)
+        entry: mise run audit
+        language: system
+        pass_filenames: false
+        always_run: true
 
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.23.1

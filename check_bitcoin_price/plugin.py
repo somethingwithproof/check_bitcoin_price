@@ -14,6 +14,7 @@ from typing import NamedTuple, Never
 
 import requests
 
+from check_bitcoin_price import __version__
 from check_bitcoin_price.quotes import PriceQuote, parse_price, parse_quote
 from check_bitcoin_price.transport import fetch_json
 
@@ -276,7 +277,7 @@ Examples:
         "-V",
         "--version",
         action="version",
-        version="%(prog)s 1.0.0",
+        version=f"%(prog)s {__version__}",
     )
 
     return parser.parse_args(args)

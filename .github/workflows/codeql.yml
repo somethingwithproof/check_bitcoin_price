@@ -2,18 +2,15 @@ name: "CodeQL"
 
 on:
   push:
-    branches: [main, master, develop, regression-audit]
-    paths-ignore:
-      - "**/*.php"
-      - "**/*.md"
+    branches: [main]
   pull_request:
-    branches: [main, master, develop, regression-audit]
-    paths-ignore:
-      - "**/*.php"
-      - "**/*.md"
+    branches: [main]
   schedule:
     - cron: "30 1 * * 1"
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: codeql-${{ github.ref }}
@@ -24,9 +21,6 @@ jobs:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    concurrency:
-      group: codeql-${{ github.ref }}-${{ matrix.language }}
-      cancel-in-progress: true
     permissions:
       actions: read
       contents: read
@@ -37,13 +31,12 @@ jobs:
         language: ["python"]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Initialize CodeQL
         uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v3
         with:
           languages: ${{ matrix.language }}
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v3
+          build-mode: none
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v3
         with:
