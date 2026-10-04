@@ -7,8 +7,9 @@ and returns appropriate Nagios status codes based on configured thresholds.
 """
 
 import argparse
+import math
 import sys
-from typing import NamedTuple
+from typing import NamedTuple, Never
 
 import requests
 
@@ -22,6 +23,40 @@ UNKNOWN = 3
 DEFAULT_API_URL = "https://api.coingecko.com/api/v3/simple/price"
 DEFAULT_TIMEOUT = 10
 DEFAULT_CURRENCY = "usd"
+
+
+class ConfigurationError(ValueError):
+    """Invalid monitoring check configuration."""
+
+
+class PluginArgumentParser(argparse.ArgumentParser):
+    """Report invalid arguments as UNKNOWN rather than CRITICAL (exit 2)."""
+
+    def error(self, message: str) -> Never:
+        raise ConfigurationError(message)
+
+
+def validate_thresholds(low: float | None, high: float | None) -> None:
+    """Require finite, nonnegative bounds in ascending order."""
+    for value in (low, high):
+        if value is not None and (not math.isfinite(value) or value < 0):
+            raise ConfigurationError("Thresholds must be finite, nonnegative numbers")
+    if low is not None and high is not None and low > high:
+        raise ConfigurationError("Low threshold must not exceed high threshold")
+
+
+def parse_price(price: object) -> float:
+    """Normalize a price without allowing invalid data to report OK."""
+    message = "Bitcoin price must be a finite, nonnegative number"
+    if isinstance(price, bool) or not isinstance(price, (int, float, str)):
+        raise ValueError(message)
+    try:
+        value = float(price)
+    except (ValueError, OverflowError) as exc:
+        raise ValueError(message) from exc
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(message)
+    return value
 
 
 class ThresholdResult(NamedTuple):
@@ -49,6 +84,8 @@ class BitcoinPriceChecker:
             currency: Currency to check price in (e.g., usd, eur, gbp)
         """
         self.api_url = api_url
+        if timeout <= 0:
+            raise ConfigurationError("Timeout must be greater than zero")
         self.timeout = timeout
         self.currency = currency.lower()
 
@@ -75,9 +112,9 @@ class BitcoinPriceChecker:
         response.raise_for_status()
 
         data = response.json()
-        price = data["bitcoin"][self.currency]
-
-        return float(price)
+        if not isinstance(data, dict) or not isinstance(data.get("bitcoin"), dict):
+            raise ValueError("Expected a Bitcoin price object")
+        return parse_price(data["bitcoin"][self.currency])
 
     def check_thresholds(
         self,
@@ -100,36 +137,26 @@ class BitcoinPriceChecker:
         Returns:
             ThresholdResult with status code and message
         """
+        price = parse_price(price)
+        validate_thresholds(warning_low, warning_high)
+        validate_thresholds(critical_low, critical_high)
         currency_upper = self.currency.upper()
 
-        # Check critical thresholds first
-        if critical_low is not None and price < critical_low:
+        # Critical always takes precedence over warning, including overlapping bounds.
+        for status, label, low, high in (
+            (CRITICAL, "CRITICAL", critical_low, critical_high),
+            (WARNING, "WARNING", warning_low, warning_high),
+        ):
+            if low is not None and price < low:
+                direction, bound = "below", low
+            elif high is not None and price > high:
+                direction, bound = "above", high
+            else:
+                continue
             return ThresholdResult(
-                CRITICAL,
-                f"CRITICAL - Bitcoin price {price:.2f} {currency_upper} is below "
-                f"critical threshold {critical_low:.2f} {currency_upper}",
-            )
-
-        if critical_high is not None and price > critical_high:
-            return ThresholdResult(
-                CRITICAL,
-                f"CRITICAL - Bitcoin price {price:.2f} {currency_upper} is above "
-                f"critical threshold {critical_high:.2f} {currency_upper}",
-            )
-
-        # Check warning thresholds
-        if warning_low is not None and price < warning_low:
-            return ThresholdResult(
-                WARNING,
-                f"WARNING - Bitcoin price {price:.2f} {currency_upper} is below "
-                f"warning threshold {warning_low:.2f} {currency_upper}",
-            )
-
-        if warning_high is not None and price > warning_high:
-            return ThresholdResult(
-                WARNING,
-                f"WARNING - Bitcoin price {price:.2f} {currency_upper} is above "
-                f"warning threshold {warning_high:.2f} {currency_upper}",
+                status,
+                f"{label} - Bitcoin price {price:.2f} {currency_upper} is {direction} "
+                f"{label.lower()} threshold {bound:.2f} {currency_upper}",
             )
 
         return ThresholdResult(
@@ -147,7 +174,7 @@ def parse_args(args: list | None = None) -> argparse.Namespace:
     Returns:
         Parsed arguments namespace
     """
-    parser = argparse.ArgumentParser(
+    parser = PluginArgumentParser(
         description="Nagios plugin to check Bitcoin price",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
@@ -247,15 +274,31 @@ def parse_range(range_str: str) -> tuple[float | None, float | None]:
         ValueError: If range format is invalid
     """
     if ":" not in range_str:
-        raise ValueError(f"Invalid range format: {range_str}. Expected LOW:HIGH")
+        raise ConfigurationError("Invalid range format. Expected LOW:HIGH")
 
     parts = range_str.split(":")
     if len(parts) != 2:
-        raise ValueError(f"Invalid range format: {range_str}. Expected LOW:HIGH")
+        raise ConfigurationError("Invalid range format. Expected LOW:HIGH")
 
-    low = float(parts[0]) if parts[0] else None
-    high = float(parts[1]) if parts[1] else None
+    try:
+        low = float(parts[0]) if parts[0] else None
+        high = float(parts[1]) if parts[1] else None
+    except ValueError as exc:
+        raise ConfigurationError("Range bounds must be numbers") from exc
+    validate_thresholds(low, high)
 
+    return low, high
+
+
+def resolve_thresholds(
+    range_str: str | None, low: float | None, high: float | None
+) -> tuple[float | None, float | None]:
+    """Merge range bounds with individual options, then validate the result."""
+    if range_str is not None:
+        range_low, range_high = parse_range(range_str)
+        low = range_low if range_low is not None else low
+        high = range_high if range_high is not None else high
+    validate_thresholds(low, high)
     return low, high
 
 
@@ -272,21 +315,12 @@ def main(args: list | None = None) -> int:
     try:
         parsed_args = parse_args(args)
 
-        # Parse threshold ranges if provided
-        warning_low = parsed_args.warning_low
-        warning_high = parsed_args.warning_high
-        critical_low = parsed_args.critical_low
-        critical_high = parsed_args.critical_high
-
-        if parsed_args.warning:
-            w_low, w_high = parse_range(parsed_args.warning)
-            warning_low = w_low if w_low is not None else warning_low
-            warning_high = w_high if w_high is not None else warning_high
-
-        if parsed_args.critical:
-            c_low, c_high = parse_range(parsed_args.critical)
-            critical_low = c_low if c_low is not None else critical_low
-            critical_high = c_high if c_high is not None else critical_high
+        warning_low, warning_high = resolve_thresholds(
+            parsed_args.warning, parsed_args.warning_low, parsed_args.warning_high
+        )
+        critical_low, critical_high = resolve_thresholds(
+            parsed_args.critical, parsed_args.critical_low, parsed_args.critical_high
+        )
 
         # Create checker and get price
         checker = BitcoinPriceChecker(
@@ -296,7 +330,7 @@ def main(args: list | None = None) -> int:
         )
 
         if parsed_args.verbose:
-            print(f"Fetching Bitcoin price from {parsed_args.api_url}...")
+            print("Fetching Bitcoin price...", file=sys.stderr)
 
         price = checker.get_bitcoin_price()
 
@@ -315,6 +349,9 @@ def main(args: list | None = None) -> int:
 
         return result.status
 
+    except ConfigurationError as e:
+        print(f"UNKNOWN - Invalid configuration: {e}")
+        return UNKNOWN
     except requests.Timeout:
         print("UNKNOWN - API request timed out")
         return UNKNOWN

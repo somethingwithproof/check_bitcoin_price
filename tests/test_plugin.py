@@ -1,5 +1,7 @@
 """Tests for the Bitcoin price checker Nagios plugin."""
 
+import json
+
 import pytest
 import requests
 import responses
@@ -164,6 +166,13 @@ class TestBitcoinPriceChecker:
             warning_high=50000,
         )
         assert result.status == WARNING
+
+    def test_critical_takes_precedence_over_overlapping_warning(self):
+        result = BitcoinPriceChecker().check_thresholds(
+            price=55000, warning_low=60000, critical_high=50000
+        )
+        assert result.status == CRITICAL
+        assert "above critical threshold" in result.message
 
 
 class TestParseArgs:
@@ -345,6 +354,18 @@ class TestMain:
         assert "WARNING" in captured.out
         assert "above" in captured.out
 
+    @pytest.mark.parametrize(
+        "args, expected",
+        [
+            (["-w", "30000:50000", "--warning-high", "35000"], OK),
+            (["-w", "30000:", "--warning-high", "35000"], WARNING),
+        ],
+    )
+    @responses.activate
+    def test_range_bound_precedence_and_individual_fallback(self, args, expected):
+        responses.add(responses.GET, DEFAULT_API_URL, json={"bitcoin": {"usd": 40000}})
+        assert main(args) == expected
+
     @responses.activate
     def test_main_performance_data(self, capsys):
         """Test that performance data is included in output."""
@@ -359,6 +380,81 @@ class TestMain:
 
         captured = capsys.readouterr()
         assert "| bitcoin_price=43521.50" in captured.out
+
+    @pytest.mark.parametrize(
+        "price",
+        [None, True, False, -1, float("nan"), float("inf"), "NaN", [], {}, 10**400],
+    )
+    @responses.activate
+    def test_invalid_api_price_is_unknown(self, price, capsys):
+        responses.add(responses.GET, DEFAULT_API_URL, json={"bitcoin": {"usd": price}})
+
+        assert main(["--warning-low", "30000"]) == UNKNOWN
+        output = capsys.readouterr().out
+        assert output.startswith("UNKNOWN - Failed to parse API response:")
+        assert "bitcoin_price=" not in output
+
+    @pytest.mark.parametrize(
+        "payload", [[], None, {}, {"bitcoin": []}, {"bitcoin": {}}]
+    )
+    @responses.activate
+    def test_malformed_payload_is_unknown(self, payload, capsys):
+        responses.add(responses.GET, DEFAULT_API_URL, body=json.dumps(payload))
+
+        assert main([]) == UNKNOWN
+        assert capsys.readouterr().out.startswith("UNKNOWN - ")
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["--timeout", "0"],
+            ["--timeout=-1"],
+            ["--timeout", "invalid"],
+            ["--warning-low", "nan"],
+            ["--critical-high", "inf"],
+            ["--warning-low=-1"],
+            ["--warning-low", "50000", "--warning-high", "30000"],
+            ["--critical-low", "50000", "--critical-high", "30000"],
+            ["-w", "50000:30000"],
+            ["-c", "nan:50000"],
+            ["-w", "invalid:50000"],
+            ["-w", ""],
+            ["-w", "30000"],
+            ["-w", ":30000", "--warning-low", "50000"],
+            ["--unknown-option"],
+            ["--warning-low"],
+        ],
+    )
+    @responses.activate
+    def test_invalid_configuration_is_unknown_without_request(self, args, capsys):
+        assert main(args) == UNKNOWN
+        assert capsys.readouterr().out.startswith("UNKNOWN - Invalid configuration:")
+        assert not responses.calls
+
+    @responses.activate
+    def test_timeout_is_unknown(self, capsys):
+        responses.add(responses.GET, DEFAULT_API_URL, body=requests.Timeout())
+
+        assert main([]) == UNKNOWN
+        assert capsys.readouterr().out == "UNKNOWN - API request timed out\n"
+
+    @responses.activate
+    def test_verbose_preserves_single_status_line(self, capsys):
+        responses.add(responses.GET, DEFAULT_API_URL, json={"bitcoin": {"usd": 40000}})
+
+        assert main(["--verbose"]) == OK
+        output = capsys.readouterr()
+        assert (
+            output.out
+            == "OK - Bitcoin price is 40000.00 USD | bitcoin_price=40000.00\n"
+        )
+        assert "Fetching Bitcoin price" in output.err
+
+    @pytest.mark.parametrize("args", [["--help"], ["--version"]])
+    def test_informational_options_exit_successfully(self, args):
+        with pytest.raises(SystemExit) as exc:
+            main(args)
+        assert exc.value.code == 0
 
 
 class TestEdgeCases:
