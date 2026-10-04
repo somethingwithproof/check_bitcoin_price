@@ -363,7 +363,8 @@ class TestMain:
         assert "| bitcoin_price=43521.50" in captured.out
 
     @pytest.mark.parametrize(
-        "price", [None, True, False, -1, float("nan"), float("inf"), "NaN", [], {}]
+        "price",
+        [None, True, False, -1, float("nan"), float("inf"), "NaN", [], {}, 10**400],
     )
     @responses.activate
     def test_invalid_api_price_is_unknown(self, price, capsys):
@@ -371,7 +372,7 @@ class TestMain:
 
         assert main(["--warning-low", "30000"]) == UNKNOWN
         output = capsys.readouterr().out
-        assert output.startswith("UNKNOWN - ")
+        assert output.startswith("UNKNOWN - Failed to parse API response:")
         assert "bitcoin_price=" not in output
 
     @pytest.mark.parametrize(

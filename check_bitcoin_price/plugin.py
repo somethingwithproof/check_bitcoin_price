@@ -103,7 +103,12 @@ class BitcoinPriceChecker:
         price = data["bitcoin"][self.currency]
         if isinstance(price, bool) or not isinstance(price, (int, float, str)):
             raise ValueError("Bitcoin price must be a finite, nonnegative number")
-        value = float(price)
+        try:
+            value = float(price)
+        except OverflowError as exc:
+            raise ValueError(
+                "Bitcoin price must be a finite, nonnegative number"
+            ) from exc
         if not math.isfinite(value) or value < 0:
             raise ValueError("Bitcoin price must be a finite, nonnegative number")
         return value
