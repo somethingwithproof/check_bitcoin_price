@@ -30,7 +30,7 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref_name }}
           fetch-depth: 0
-      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
         with:
           version: "2026.10.2"
       - name: Verify stable version and main ancestry
@@ -49,7 +49,7 @@ jobs:
         run: mise run package
       - name: Test native package installation
         run: bash scripts/test_native_packages.sh
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-assets
           path: dist/*
@@ -66,7 +66,7 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
       RELEASE_COMMIT: ${{ needs.build.outputs.commit }}
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-assets
           path: dist
