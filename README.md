@@ -1,10 +1,10 @@
 # check_bitcoin_price
 
-A Nagios/Icinga plugin to monitor Bitcoin price with configurable warning and critical thresholds.
+[![CI](https://github.com/somethingwithproof/check_bitcoin_price/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/somethingwithproof/check_bitcoin_price/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+[![Python requirement](https://img.shields.io/badge/Python_requirement-%3E%3D3.12-blue)](./pyproject.toml)
 
-[![Python Version](https://img.shields.io/pypi/pyversions/check-bitcoin-price.svg)](https://pypi.org/project/check-bitcoin-price/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![CI](https://github.com/somethingwithproof/check_bitcoin_price/actions/workflows/ci.yml/badge.svg)](https://github.com/somethingwithproof/check_bitcoin_price/actions/workflows/ci.yml)
+A Nagios/Icinga plugin to monitor Bitcoin price with configurable warning and critical thresholds.
 
 ## Features
 
@@ -20,12 +20,6 @@ A Nagios/Icinga plugin to monitor Bitcoin price with configurable warning and cr
 - Price thresholds, request duration, and quote age in performance data
 
 ## Installation
-
-### From PyPI
-
-```bash
-pip install check-bitcoin-price
-```
 
 ### From GitHub Releases
 
@@ -233,7 +227,7 @@ so stdout contains a single monitoring status line.
 
 The plugin outputs performance data in standard Nagios format:
 
-```
+```text
 bitcoin_price=43521.00;30000:50000;25000:60000;0; request_time=0.125s;;;0; price_age=20.000s;;;0; bitcoin_change_24h=-6.00%;-5:5;-10:10;;
 ```
 
