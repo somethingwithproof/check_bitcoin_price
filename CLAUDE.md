@@ -1,21 +1,22 @@
-# CLAUDE.md
+<!--
+SPDX-FileCopyrightText: 2024 Thomas Vincent
+SPDX-License-Identifier: MIT
+-->
 
-Nagios/Icinga monitoring plugin for Bitcoin price alerts.
+# check_bitcoin_price coding guide
 
-## Stack
-- Python 3.8+
+Read [AGENTS.md](AGENTS.md) before making changes. It contains the repository's
+architecture, canonical commands, supported boundaries and operating rules.
+Follow any applicable nested instructions and the checked-out CI configuration.
 
-## Lint & Test
-```bash
-pytest
-black check_bitcoin_price tests
-isort check_bitcoin_price tests
-mypy check_bitcoin_price
-flake8 check_bitcoin_price tests
-```
+## Project priorities
 
-## Local Test
-```bash
-# Simulate monitoring check
-check_bitcoin_price -w 30000:50000 -c 25000:60000
-```
+Review quote freshness, currency consistency, signed movement, highest severity and total request deadlines.
+
+## Verification
+
+`mise run check`, `mise run test`, `mise run audit` and `mise run build`, invoked as separate tasks.
+
+Separate offline checks from operations that change hosts, databases, firewalls
+or published artifacts. State verification limits and preserve existing controls.
+Select language runtimes through `mise`; never commit local session state or secrets.
