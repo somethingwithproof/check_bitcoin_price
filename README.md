@@ -21,12 +21,6 @@ A Nagios/Icinga plugin to monitor Bitcoin price with configurable warning and cr
 
 ## Installation
 
-### From PyPI
-
-```bash
-pip install check-bitcoin-price
-```
-
 ### From GitHub Releases
 
 Download `.deb`, `.rpm`, `.tar.gz`, wheel, and `SHA256SUMS` files from [GitHub Releases](https://github.com/somethingwithproof/check_bitcoin_price/releases). Verify a download with `sha256sum --ignore-missing --check SHA256SUMS`.
