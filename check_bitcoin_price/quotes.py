@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Thomas Vincent <thomasvincent@gmail.com>
+# SPDX-License-Identifier: MIT
+
 """Validated Bitcoin quotes and optional freshness/change metadata."""
 
 import math

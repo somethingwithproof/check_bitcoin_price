@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Thomas Vincent <thomasvincent@gmail.com>
+# SPDX-License-Identifier: MIT
+
 """Build architecture-independent Linux packages and release checksums."""
 
 import hashlib

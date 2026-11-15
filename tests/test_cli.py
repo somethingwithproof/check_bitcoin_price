@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Thomas Vincent <thomasvincent@gmail.com>
+# SPDX-License-Identifier: MIT
+
 """Test the installed wheel's console command against a local HTTP server."""
 
 import json
