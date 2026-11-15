@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Thomas Vincent <thomasvincent@gmail.com>
+# SPDX-License-Identifier: MIT
+
 set -euo pipefail
 
 # Ubuntu 24.04 supplies Python 3.12; apt resolves the declared dependencies.
