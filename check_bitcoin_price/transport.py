@@ -3,6 +3,7 @@
 
 """HTTP retrieval with bounded retries and a total check deadline."""
 
+import json
 import math
 import time
 from email.utils import parsedate_to_datetime
@@ -11,6 +12,7 @@ from threading import Thread
 
 import requests
 
+MAX_RESPONSE_BYTES = 64 * 1024
 RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
 TIMEOUT_MESSAGE = "Total timeout expired"
 
@@ -31,6 +33,12 @@ def retry_delay(response: requests.Response | None, attempt: int) -> float:
     return max(0.0, seconds) if math.isfinite(seconds) else fallback
 
 
+def close_redirect_body(response: requests.Response, **kwargs: object) -> None:
+    # Requests otherwise buffers an entire redirect body before following Location.
+    if response.is_redirect:
+        response.close()
+
+
 def fetch_with_retries(
     url: str, params: dict[str, str], deadline: float, retries: int
 ) -> object:
@@ -44,13 +52,24 @@ def fetch_with_retries(
                 url,
                 params=params,
                 timeout=remaining,
+                stream=True,
+                hooks={"response": close_redirect_body},
                 headers={"Accept": "application/json"},
             ) as response:
                 if response.status_code not in RETRYABLE_STATUS or attempt == retries:
                     response.raise_for_status()
-                    return response.json()
+                    body = bytearray()
+                    for chunk in response.iter_content(8192):
+                        if time.monotonic() >= deadline:
+                            raise requests.Timeout(TIMEOUT_MESSAGE)
+                        if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
+                            raise ValueError("Quote response exceeds 64 KiB")
+                        body.extend(chunk)
+                    return json.loads(body)
                 # Close the response before waiting or making another request.
                 delay = retry_delay(response, attempt)
+        except requests.exceptions.SSLError:
+            raise
         except (requests.Timeout, requests.ConnectionError):
             if attempt == retries:
                 raise
@@ -62,7 +81,12 @@ def fetch_with_retries(
 
 
 def fetch_json(
-    url: str, params: dict[str, str], timeout: float, retries: int
+    url: str,
+    params: dict[str, str],
+    timeout: float,
+    retries: int,
+    *,
+    deadline: float | None = None,
 ) -> object:
     """Bound DNS, connect, body reads, decoding, and retries by one deadline.
 
@@ -71,7 +95,8 @@ def fetch_json(
     The worker owns and closes its response; it cannot print or submit more
     retries once its deadline expires. It does not block interpreter shutdown.
     """
-    deadline = time.monotonic() + timeout
+    if deadline is None:
+        deadline = time.monotonic() + timeout
     results: Queue[object] = Queue(maxsize=1)
 
     def retrieve() -> None:
