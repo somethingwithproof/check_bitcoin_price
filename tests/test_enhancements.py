@@ -285,3 +285,24 @@ def test_new_configuration_is_validated_before_requests(args, capsys):
     assert main(args) == UNKNOWN
     assert "Invalid configuration" in capsys.readouterr().out
     assert not responses.calls
+
+
+@responses.activate
+@pytest.mark.parametrize("extra", [0, 1])
+def test_response_limit_applies_to_decoded_bytes(extra):
+    body = b"{}" + b" " * (transport.MAX_RESPONSE_BYTES - 2 + extra)
+    responses.add(responses.GET, DEFAULT_API_URL, body=body)
+    if extra:
+        with pytest.raises(ValueError, match="exceeds 64 KiB"):
+            transport.fetch_json(DEFAULT_API_URL, {}, 1, 0)
+    else:
+        assert transport.fetch_json(DEFAULT_API_URL, {}, 1, 0) == {}
+
+
+@responses.activate
+def test_deadline_expires_while_reading_body(monkeypatch):
+    ticks = iter([0, 1])
+    monkeypatch.setattr(transport.time, "monotonic", lambda: next(ticks))
+    responses.add(responses.GET, DEFAULT_API_URL, body=b"{}")
+    with pytest.raises(requests.Timeout, match="Total timeout expired"):
+        transport.fetch_with_retries(DEFAULT_API_URL, {}, 1, 0)

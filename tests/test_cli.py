@@ -3,6 +3,7 @@
 
 """Test the installed wheel's console command against a local HTTP server."""
 
+import gzip
 import json
 import os
 import subprocess
@@ -80,6 +81,25 @@ def api_server():
 
         def do_GET(self):
             path = urlsplit(self.path).path
+            if path == "/rate-limit":
+                self.send_response(429)
+                self.send_header("Retry-After", "60")
+                self.end_headers()
+                return
+            if path == "/redirect":
+                self.send_response(302)
+                self.send_header("Location", "/ok")
+                self.end_headers()
+                return
+            if path in ("/oversize", "/compressed"):
+                self.send_response(200)
+                body = b" " * (64 * 1024) + b"{}"
+                if path == "/compressed":
+                    self.send_header("Content-Encoding", "gzip")
+                    body = gzip.compress(body)
+                self.end_headers()
+                self.wfile.write(body)
+                return
             price = {"/warning": 28000, "/critical": 20000}.get(path, 40000)
             quote = {"usd": price, "usd_24h_change": -6}
             if path != "/missing":
@@ -165,3 +185,47 @@ def test_slow_drip_cannot_extend_total_deadline(installed_cli, api_server):
     assert "timed out" in result.stdout
     # Includes interpreter startup. The response would take over 2 seconds to drip.
     assert time.monotonic() - started < 1.5
+
+
+@pytest.mark.parametrize(
+    "primary,backup,code,detail",
+    [
+        ("/rate-limit", "/redirect", 0, "source=fallback1"),
+        ("/compressed", "/ok", 3, "exceeds 64 KiB"),
+        ("/slow", "/slow", 3, "timed out"),
+        ("/rate-limit", "/critical", 2, "source=fallback1"),
+        ("/slow", "/ok", 0, "source=fallback1"),
+        ("/oversize", "/ok", 3, "exceeds 64 KiB"),
+        ("/rate-limit", "/oversize", 3, "exceeds 64 KiB"),
+        ("/rate-limit", "/stale", 3, "stale"),
+        ("/rate-limit", "/rate-limit", 3, "timed out"),
+    ],
+)
+def test_fallback_contract(installed_cli, api_server, primary, backup, code, detail):
+    command, cwd = installed_cli
+    result = subprocess.run(
+        [
+            command,
+            "--api-url",
+            api_server + primary + "?key=private",
+            "--fallback-url",
+            api_server + backup + "?key=private",
+            "--critical-low",
+            "25000",
+            "--max-age",
+            "60",
+            "--timeout",
+            "0.5",
+            "--verbose",
+        ],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=2,
+    )
+    assert result.returncode == code
+    assert detail in result.stdout
+    if code != 3:
+        assert "fallback1" in result.stderr
+    assert "private" not in result.stdout + result.stderr
+    assert len(result.stdout.splitlines()) == 1

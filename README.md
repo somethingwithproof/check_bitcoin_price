@@ -125,6 +125,36 @@ the `--timeout` budget. A retry wait that cannot fit returns `UNKNOWN` immediate
 Authentication failures, other permanent HTTP errors, and invalid JSON are not
 retried. Use `--retries 0` to disable retries.
 
+### Fallback quote sources
+
+Use repeatable `--fallback-url URL` options with CoinGecko-compatible endpoints.
+For example, add `--fallback-url https://quotes.example.org/simple/price`.
+Each source gets an equal share of the remaining request deadline, including its
+retries. A transient failure or a retry delay longer than that share advances to
+the next source. TLS verification failures, permanent HTTP errors and invalid
+quotes return UNKNOWN. Each quote response is limited to 64 KiB of decoded data.
+When fallbacks are configured, the status identifies the answering source as
+`primary`, `fallback1`, and so on, without printing its URL.
+
+### Short-window movement
+
+```bash
+check_bitcoin_price --state-file /var/lib/nagios/bitcoin-usd.json \
+  --move-window 900 --warning-move 3 --critical-move 6
+```
+
+Give the monitoring user a private writable state directory on a local Linux or
+macOS filesystem. Keep the sibling `.lock` file in place between checks. Use a
+separate state file per window. Currencies have independent histories inside it.
+The default window is 3600 seconds. Each valid quote needs a vendor timestamp
+within the window and any stricter `--max-age`. The plugin compares the current
+price with the oldest earlier positive price in that window and reports the
+actual elapsed seconds. Repeated timestamps do not create additional samples.
+A first sample, expired history, or corrupt JSON starts a new baseline; the
+window metric is unknown until there is a comparable sample. Other alerts still
+apply. Unwritable state returns UNKNOWN. The signed `bitcoin_move_window` metric
+uses symmetric warning and critical ranges. Equality at a limit does not alert.
+
 ### Daily Percentage Movement
 
 ```bash
@@ -155,7 +185,11 @@ when severities match.
 | `--max-age` | Maximum vendor quote age in seconds; disabled by default |
 | `--warning-change` | Warning limit for absolute 24-hour percentage movement |
 | `--critical-change` | Critical limit for absolute 24-hour percentage movement |
-| `--api-url` | Custom API URL |
+| `--api-url` | Primary API URL |
+| `--fallback-url` | Additional compatible endpoint; repeat in preferred order |
+| `--state-file` | JSON movement history file |
+| `--move-window` | Movement window in seconds (default: 3600) |
+| `--warning-move`, `--critical-move` | Absolute window movement thresholds in percent |
 | `-v`, `--verbose` | Enable verbose output |
 | `-V`, `--version` | Show version |
 | `-h`, `--help` | Show help message |
@@ -164,12 +198,12 @@ when severities match.
 
 ### Command Definition
 
-Add to your Nagios commands configuration:
+Set the Nagios resource macro `$USER1$` to the plugin directory (the native packages use `/usr/lib/nagios/plugins`). Add to your Nagios commands configuration:
 
 ```cfg
 define command {
     command_name    check_bitcoin_price
-    command_line    /usr/local/bin/check_bitcoin_price -w $ARG1$ -c $ARG2$ --currency $ARG3$
+    command_line    $USER1$/check_bitcoin_price -w $ARG1$ -c $ARG2$ --currency $ARG3$
 }
 ```
 
