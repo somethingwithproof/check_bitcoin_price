@@ -6,7 +6,7 @@ set -euo pipefail
 
 # Resolve the command exactly as documented for a packaged Nagios installation.
 documented=$(awk '/command_line .*check_bitcoin_price/{print $2; exit}' README.md)
-test "$documented" = '$USER1$/check_bitcoin_price'
+[[ "$documented" == '$USER1$/check_bitcoin_price' ]]
 plugin="/usr/lib/nagios/plugins/${documented#*/}"
 
 # Ubuntu 24.04 supplies Python 3.12; apt resolves the declared dependencies.
