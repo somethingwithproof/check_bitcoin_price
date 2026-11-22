@@ -19,7 +19,7 @@ from typing import NamedTuple, Never
 import requests
 
 from check_bitcoin_price import __version__
-from check_bitcoin_price.movement import record_price
+from check_bitcoin_price.movement import OutOfOrderSampleError, record_price
 from check_bitcoin_price.quotes import PriceQuote, parse_price, parse_quote
 from check_bitcoin_price.transport import RETRYABLE_STATUS, fetch_json
 
@@ -505,6 +505,10 @@ def run_check(parsed_args: argparse.Namespace) -> ThresholdResult:
                 window,
                 quote.timestamp,
                 quote.price,
+            )
+        except OutOfOrderSampleError:
+            return ThresholdResult(
+                UNKNOWN, "UNKNOWN - Quote is older than movement history"
             )
         except OSError:
             return ThresholdResult(UNKNOWN, "UNKNOWN - Cannot update movement history")

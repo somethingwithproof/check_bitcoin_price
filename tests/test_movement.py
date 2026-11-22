@@ -68,11 +68,18 @@ def test_concurrent_state_updates(tmp_path):
 
     def update(stamp):
         start.wait(timeout=2)
-        movement.record_price(path, "usd", 60, stamp, stamp)
+        try:
+            movement.record_price(path, "usd", 60, stamp, stamp)
+        except movement.OutOfOrderSampleError:
+            return None  # Lost the race to a newer sample; correctly refused.
+        return stamp
 
     with ThreadPoolExecutor(max_workers=4) as workers:
-        list(workers.map(update, range(1, 5)))
-    assert json.loads(path.read_text())["usd"] == [[s, s] for s in range(1, 5)]
+        accepted = {s for s in workers.map(update, range(1, 5)) if s is not None}
+    stored = {t for t, _ in json.loads(path.read_text())["usd"]}
+    # The newest sample always lands, and no accepted update may be lost.
+    assert 4 in accepted
+    assert accepted <= stored
 
 
 @responses.activate
@@ -158,3 +165,46 @@ def test_busy_state_file_has_a_bounded_wait(tmp_path):
         with pytest.raises(BlockingIOError):
             movement.record_price(path, "usd", 60, 10, 10)
     assert not path.exists()
+
+
+def test_out_of_order_sample_is_rejected_without_losing_history(tmp_path):
+    path = tmp_path / "state"
+    movement.record_price(path, "usd", 60, 1000, 100)
+    movement.record_price(path, "usd", 60, 1070, 100)
+    before = path.read_text()
+    with pytest.raises(movement.OutOfOrderSampleError):
+        movement.record_price(path, "usd", 60, 1030, 90)
+    assert path.read_text() == before
+    assert movement.record_price(path, "usd", 60, 1070, 100) == (None, 0.0)
+
+
+@responses.activate
+def test_out_of_order_quote_is_unknown(tmp_path, monkeypatch, capsys):
+    args = ["--state-file", str(tmp_path / "state"), "--move-window", "60"]
+    for stamp, expected in [(1070, 0), (1030, 3)]:
+        monkeypatch.setattr(movement.time, "time", lambda now=stamp: now)
+        responses.upsert(
+            responses.GET,
+            DEFAULT_API_URL,
+            json={"bitcoin": {"usd": 100, "last_updated_at": stamp}},
+        )
+        assert main(args) == expected
+    assert "older than movement history" in capsys.readouterr().out
+
+
+@responses.activate
+def test_symlinked_state_files_are_refused(tmp_path, capsys):
+    target = tmp_path / "target"
+    target.write_text("{}")
+    state = tmp_path / "state"
+    state.symlink_to(target)
+    with pytest.raises(OSError, match="symbolic link"):
+        movement.record_price(state, "usd", 60, 1000, 100)
+    assert target.read_text() == "{}"
+    state.unlink()
+    lock = tmp_path / "state.lock"
+    lock.unlink()
+    lock.symlink_to(target)
+    with pytest.raises(OSError, match="symbolic link"):
+        movement.record_price(state, "usd", 60, 1000, 100)
+    assert not state.exists()

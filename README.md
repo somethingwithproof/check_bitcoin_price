@@ -152,7 +152,8 @@ price with the oldest earlier positive price in that window and reports the
 actual elapsed seconds. Repeated timestamps do not create additional samples.
 A first sample, expired history, or corrupt JSON starts a new baseline; the
 window metric is unknown until there is a comparable sample. Other alerts still
-apply. Unwritable state returns UNKNOWN. The signed `bitcoin_move_window` metric
+apply. Unwritable state, a symbolic-link state or lock file, or a quote older
+than the newest recorded sample returns UNKNOWN. The signed `bitcoin_move_window` metric
 uses symmetric warning and critical ranges. Equality at a limit does not alert.
 
 ### Daily Percentage Movement

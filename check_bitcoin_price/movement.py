@@ -11,8 +11,20 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 
+class OutOfOrderSampleError(ValueError):
+    """The sample is older than history already recorded for its currency."""
+
+
+def _reject_symlink(path: Path) -> None:
+    # The state path is operator supplied; never write through a link planted in
+    # a directory that other users can modify.
+    if path.is_symlink():
+        raise OSError(f"State path must not be a symbolic link: {path.name}")
+
+
 def read_history(path: Path) -> dict[str, list[tuple[float, float]]]:
     try:
+        _reject_symlink(path)
         raw = json.loads(path.read_bytes())
         if not isinstance(raw, dict):
             return {}
@@ -37,6 +49,7 @@ def read_history(path: Path) -> dict[str, list[tuple[float, float]]]:
 
 
 def write_history(path: Path, history: dict[str, list[tuple[float, float]]]) -> None:
+    _reject_symlink(path)
     with NamedTemporaryFile(
         dir=path.parent, mode="w", encoding="utf-8", delete_on_close=False
     ) as tmp:
@@ -52,7 +65,9 @@ def record_price(
     import fcntl
 
     # Replacing the history changes its inode, so it cannot itself be the lock.
-    with path.with_name(path.name + ".lock").open("a") as lock:
+    lock_path = path.with_name(path.name + ".lock")
+    _reject_symlink(lock_path)
+    with lock_path.open("a") as lock:
         deadline = time.monotonic() + 1
         while True:
             try:
@@ -65,6 +80,11 @@ def record_price(
 
         history = read_history(path)
         samples = dict(history.get(currency, []))
+        # Retention is relative to the newest sample, so the baseline an older
+        # sample needs may already be pruned. Refuse it rather than report a
+        # missing baseline as pending.
+        if samples and timestamp < max(samples):
+            raise OutOfOrderSampleError("Quote is older than recorded history")
         samples[timestamp] = price
         newest = max(samples)
         ordered = sorted((t, p) for t, p in samples.items() if t >= newest - window)
