@@ -39,6 +39,18 @@ def close_redirect_body(response: requests.Response, **kwargs: object) -> None:
         response.close()
 
 
+def read_json(response: requests.Response, deadline: float) -> object:
+    """Decode a body of at most MAX_RESPONSE_BYTES read before the deadline."""
+    body = bytearray()
+    for chunk in response.iter_content(8192):
+        if time.monotonic() >= deadline:
+            raise requests.Timeout(TIMEOUT_MESSAGE)
+        if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
+            raise ValueError("Quote response exceeds 64 KiB")
+        body.extend(chunk)
+    return json.loads(body)
+
+
 def fetch_with_retries(
     url: str, params: dict[str, str], deadline: float, retries: int
 ) -> object:
@@ -58,24 +70,15 @@ def fetch_with_retries(
             ) as response:
                 if response.status_code not in RETRYABLE_STATUS or attempt == retries:
                     response.raise_for_status()
-                    body = bytearray()
-                    for chunk in response.iter_content(8192):
-                        if time.monotonic() >= deadline:
-                            raise requests.Timeout(TIMEOUT_MESSAGE)
-                        if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
-                            raise ValueError("Quote response exceeds 64 KiB")
-                        body.extend(chunk)
-                    return json.loads(body)
+                    return read_json(response, deadline)
                 # Close the response before waiting or making another request.
                 delay = retry_delay(response, attempt)
                 if delay >= deadline - time.monotonic():
                     # Report the status that caused the wait, not a timeout.
                     response.raise_for_status()
         except (requests.Timeout, requests.ConnectionError):
-            if attempt == retries:
-                raise
             delay = retry_delay(None, attempt)
-            if delay >= deadline - time.monotonic():
+            if attempt == retries or delay >= deadline - time.monotonic():
                 raise
         time.sleep(delay)
     raise requests.Timeout(TIMEOUT_MESSAGE)  # pragma: no cover

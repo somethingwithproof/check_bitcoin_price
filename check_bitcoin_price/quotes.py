@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 # float() also accepts digit separators, padding, and names such as "nan".
-DECIMAL_TEXT = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?", re.ASCII)
+DECIMAL_TEXT = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", re.ASCII)
 
 
 @dataclass(frozen=True)
