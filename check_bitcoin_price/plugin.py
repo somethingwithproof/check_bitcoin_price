@@ -11,6 +11,7 @@ and returns appropriate Nagios status codes based on configured thresholds.
 
 import argparse
 import math
+import re
 import sys
 import time
 from typing import NamedTuple, Never
@@ -18,7 +19,12 @@ from typing import NamedTuple, Never
 import requests
 
 from check_bitcoin_price import __version__
-from check_bitcoin_price.quotes import PriceQuote, parse_price, parse_quote
+from check_bitcoin_price.quotes import (
+    PriceQuote,
+    parse_price,
+    parse_quote,
+    plain_number,
+)
 from check_bitcoin_price.transport import fetch_json
 
 # Nagios exit codes
@@ -31,6 +37,10 @@ UNKNOWN = 3
 DEFAULT_API_URL = "https://api.coingecko.com/api/v3/simple/price"
 DEFAULT_TIMEOUT = 10
 DEFAULT_CURRENCY = "usd"
+# Applies to quotes that carry a vendor timestamp when --max-age is not given.
+DEFAULT_MAX_AGE = 3600
+# A looser pattern would let names such as last_updated_at select metadata.
+CURRENCY_CODE = re.compile(r"[a-z0-9]{2,16}", re.ASCII)
 
 
 class ConfigurationError(ValueError):
@@ -44,13 +54,17 @@ class PluginArgumentParser(argparse.ArgumentParser):
         raise ConfigurationError(message)
 
 
-def validate_thresholds(low: float | None, high: float | None) -> None:
+def validate_thresholds(
+    low: float | None,
+    high: float | None,
+    ordering: str = "Low threshold must not exceed high threshold",
+) -> None:
     """Require finite, nonnegative bounds in ascending order."""
     for value in (low, high):
         if value is not None and (not math.isfinite(value) or value < 0):
             raise ConfigurationError("Thresholds must be finite, nonnegative numbers")
     if low is not None and high is not None and low > high:
-        raise ConfigurationError("Low threshold must not exceed high threshold")
+        raise ConfigurationError(ordering)
 
 
 class ThresholdResult(NamedTuple):
@@ -78,6 +92,9 @@ class BitcoinPriceChecker:
             api_url: URL of the price API endpoint
             timeout: Request timeout in seconds
             currency: Currency to check price in (e.g., usd, eur, gbp)
+            retries: Additional attempts after a transient failure (0-5)
+            max_age: Maximum quote age in seconds; requires a vendor timestamp.
+                When None, timestamped quotes are limited to DEFAULT_MAX_AGE.
         """
         self.api_url = api_url
         if not math.isfinite(timeout) or timeout <= 0:
@@ -88,6 +105,8 @@ class BitcoinPriceChecker:
             raise ConfigurationError("Maximum age must be finite and greater than zero")
         self.timeout = timeout
         self.currency = currency.lower()
+        if CURRENCY_CODE.fullmatch(self.currency) is None:
+            raise ConfigurationError("Currency must be 2-16 letters or digits")
         self.retries = retries
         self.max_age = max_age
 
@@ -120,8 +139,9 @@ class BitcoinPriceChecker:
             data,
             self.currency,
             time.monotonic() - started,
-            self.max_age,
+            DEFAULT_MAX_AGE if self.max_age is None else self.max_age,
             require_change,
+            require_timestamp=self.max_age is not None,
         )
 
     def check_thresholds(
@@ -238,7 +258,7 @@ Examples:
         "--currency",
         type=str,
         default=DEFAULT_CURRENCY,
-        help=f"Currency to check price in (default: {DEFAULT_CURRENCY})",
+        help=f"Currency code, 2-16 letters or digits (default: {DEFAULT_CURRENCY})",
     )
     parser.add_argument(
         "--timeout",
@@ -252,7 +272,8 @@ Examples:
     parser.add_argument(
         "--max-age",
         type=float,
-        help="Maximum quote age in seconds; require vendor timestamp",
+        help=f"Maximum quote age in seconds; require vendor timestamp "
+        f"(default: {DEFAULT_MAX_AGE} when the quote has a timestamp)",
     )
     parser.add_argument(
         "--warning-change",
@@ -340,7 +361,7 @@ def check_change(
             return ThresholdResult(
                 status,
                 f"{label} - Bitcoin 24-hour change {change:+.2f}% exceeds "
-                f"{label.lower()} limit {limit:g}%",
+                f"{label.lower()} limit {plain_number(limit)}%",
             )
     return ThresholdResult(OK, "OK")
 
@@ -349,8 +370,8 @@ def performance_range(low: float | None, high: float | None) -> str:
     """Represent existing price bounds using Nagios range syntax."""
     if low is None and high is None:
         return ""
-    upper = f"{high:g}" if high is not None else ""
-    return f"{low if low is not None else 0:g}:{upper}"
+    upper = plain_number(high) if high is not None else ""
+    return f"{plain_number(low if low is not None else 0)}:{upper}"
 
 
 def performance_data(
@@ -370,12 +391,12 @@ def performance_data(
         metrics.append(f"price_age={quote.age_seconds:.3f}s;;;0;")
     if quote.change_24h is not None:
         change_warning = (
-            f"{-warning_change:g}:{warning_change:g}"
+            f"{plain_number(-warning_change)}:{plain_number(warning_change)}"
             if warning_change is not None
             else ""
         )
         change_critical = (
-            f"{-critical_change:g}:{critical_change:g}"
+            f"{plain_number(-critical_change)}:{plain_number(critical_change)}"
             if critical_change is not None
             else ""
         )
@@ -393,7 +414,11 @@ def run_check(parsed_args: argparse.Namespace) -> ThresholdResult:
     critical = resolve_thresholds(
         parsed_args.critical, parsed_args.critical_low, parsed_args.critical_high
     )
-    validate_thresholds(parsed_args.warning_change, parsed_args.critical_change)
+    validate_thresholds(
+        parsed_args.warning_change,
+        parsed_args.critical_change,
+        "Warning change must not exceed critical change",
+    )
     checker = BitcoinPriceChecker(
         api_url=parsed_args.api_url,
         timeout=parsed_args.timeout,

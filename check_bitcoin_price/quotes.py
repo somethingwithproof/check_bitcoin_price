@@ -4,8 +4,13 @@
 """Validated Bitcoin quotes and optional freshness/change metadata."""
 
 import math
+import re
 import time
 from dataclasses import dataclass
+from decimal import Decimal
+
+# float() also accepts digit separators, padding, and names such as "nan".
+DECIMAL_TEXT = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?", re.ASCII)
 
 
 @dataclass(frozen=True)
@@ -23,6 +28,8 @@ def finite_number(value: object, label: str) -> float:
     message = f"{label} must be a finite number"
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         raise ValueError(message)
+    if isinstance(value, str) and DECIMAL_TEXT.fullmatch(value) is None:
+        raise ValueError(message)
     try:
         number = float(value)
     except (ValueError, OverflowError) as exc:
@@ -30,6 +37,13 @@ def finite_number(value: object, label: str) -> float:
     if not math.isfinite(number):
         raise ValueError(message)
     return number
+
+
+def plain_number(value: float) -> str:
+    """Format without an exponent or rounding; perfdata parsers reject 1.5e+07."""
+    # Adding zero turns -0.0 into 0.0.
+    text = format(Decimal(repr(value + 0.0)), "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
 
 
 def parse_price(price: object) -> float:
@@ -40,10 +54,12 @@ def parse_price(price: object) -> float:
     return value
 
 
-def quote_age(timestamp: object, max_age: float | None) -> float | None:
-    """Require a usable vendor timestamp when freshness is enabled."""
+def quote_age(
+    timestamp: object, max_age: float | None, required: bool = True
+) -> float | None:
+    """Reject stale quotes; a missing timestamp fails only when required."""
     if timestamp is None:
-        if max_age is not None:
+        if max_age is not None and required:
             raise ValueError("Quote timestamp is missing; freshness cannot be verified")
         return None
     updated_at = finite_number(timestamp, "Quote timestamp")
@@ -51,7 +67,9 @@ def quote_age(timestamp: object, max_age: float | None) -> float | None:
     if updated_at <= 0 or age < 0:
         raise ValueError("Quote timestamp must be positive and not in the future")
     if max_age is not None and age > max_age:
-        raise ValueError(f"Quote is stale ({age:.1f}s old; maximum {max_age:g}s)")
+        raise ValueError(
+            f"Quote is stale ({age:.1f}s old; maximum {plain_number(max_age)}s)"
+        )
     return age
 
 
@@ -61,13 +79,16 @@ def parse_quote(
     request_seconds: float,
     max_age: float | None = None,
     require_change: bool = False,
+    require_timestamp: bool = True,
 ) -> PriceQuote:
     """Validate price and metadata before evaluating any alerts."""
     if not isinstance(data, dict) or not isinstance(data.get("bitcoin"), dict):
         raise ValueError("Expected a Bitcoin price object")
     bitcoin = data["bitcoin"]
+    if currency not in bitcoin:
+        raise ValueError(f"Response has no {currency.upper()} price")
     price = parse_price(bitcoin[currency])
-    age = quote_age(bitcoin.get("last_updated_at"), max_age)
+    age = quote_age(bitcoin.get("last_updated_at"), max_age, require_timestamp)
     raw_change = bitcoin.get(f"{currency}_24h_change")
     if raw_change is None and require_change:
         raise ValueError("24-hour change is missing; change alerts cannot be evaluated")
