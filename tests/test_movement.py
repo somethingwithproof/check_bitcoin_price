@@ -1,0 +1,260 @@
+# SPDX-FileCopyrightText: 2026 Thomas Vincent
+# SPDX-License-Identifier: MIT
+
+import json
+import sys
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
+import pytest
+import requests
+import responses
+
+from check_bitcoin_price import movement
+from check_bitcoin_price.plugin import DEFAULT_API_URL, main
+
+
+@responses.activate
+def test_window_severity_and_elapsed_time(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "state"
+    args = [
+        "--state-file",
+        str(path),
+        "--move-window",
+        "900",
+        "--warning-move",
+        "3",
+        "--critical-move",
+        "6",
+    ]
+    for stamp, price, extra, status, text, metric in [
+        (1000, 100, [], 0, "baseline pending", "U"),
+        (1005, 103, [], 0, "move=+3.00% over 5s", "3.00"),
+        (1010, 96, [], 1, "10s change -4.00%", "-4.00"),
+        (1900, 92, [], 2, "900s change -8.00%", "-8.00"),
+        (2900, 100, ["--warning-high", "90"], 1, "baseline pending", "U"),
+        (2910, 102, ["--critical-low", "110"], 2, "102.00 USD is below", "2.00"),
+    ]:
+        monkeypatch.setattr(movement.time, "time", lambda now=stamp: now)
+        responses.upsert(
+            responses.GET,
+            DEFAULT_API_URL,
+            json={"bitcoin": {"usd": price, "last_updated_at": stamp}},
+        )
+        assert main(args + extra) == status
+        out = capsys.readouterr().out
+        assert text in out
+        assert f"bitcoin_move_window={metric}%;-3:3;-6:6;;" in out
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["garbage", "[]", '{"usd":[["bad",1]]}', '{"usd":[[1,-1]]}', '{"usd":null}'],
+)
+def test_recover_history(tmp_path, content):
+    path = tmp_path / "state"
+    path.write_text(content)
+    assert movement.record_price(path, "usd", 60, 100, 0) == (None, 0)
+    assert movement.record_price(path, "usd", 60, 110, 100) == (None, 0)
+    assert movement.record_price(path, "eur", 60, 111, 80) == (None, 0)
+    assert movement.record_price(path, "usd", 60, 120, 105) == (5, 10)
+    assert movement.record_price(path, "usd", 60, 120, 110) == (10, 10)
+    assert len(json.loads(path.read_text())["usd"]) == 3
+
+
+def test_concurrent_state_updates(tmp_path):
+    path = tmp_path / "state"
+    start = Barrier(4)
+
+    def update(stamp):
+        start.wait(timeout=2)
+        try:
+            movement.record_price(path, "usd", 60, stamp, stamp)
+        except movement.OutOfOrderSampleError:
+            return None  # Lost the race to a newer sample; correctly refused.
+        return stamp
+
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        accepted = {s for s in workers.map(update, range(1, 5)) if s is not None}
+    stored = {t for t, _ in json.loads(path.read_text())["usd"]}
+    # The newest sample always lands, and no accepted update may be lost.
+    assert 4 in accepted
+    assert accepted <= stored
+
+
+@responses.activate
+def test_bad_state_path_and_missing_timestamp(tmp_path, capsys):
+    args = ["--state-file", str(tmp_path / "missing" / "quotes")]
+    responses.add(responses.GET, DEFAULT_API_URL, json={"bitcoin": {"usd": 100}})
+    responses.add(
+        responses.GET,
+        DEFAULT_API_URL,
+        json={"bitcoin": {"usd": 100, "last_updated_at": movement.time.time()}},
+    )
+    assert main(args) == 3
+    assert "timestamp" in capsys.readouterr().out
+    assert main(args) == 3
+    assert "history" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--warning-move", "3"],
+        ["--state-file", "state", "--max-age", "inf"],
+        ["--state-file", "state", "--max-age", "nan"],
+        ["--move-window", "0", "--state-file", "state"],
+        ["--state-file", "state", "--warning-move", "5", "--critical-move", "1"],
+    ],
+)
+def test_invalid_options(args, capsys):
+    assert main(args) == 3
+    assert "Invalid configuration" in capsys.readouterr().out
+
+
+def test_history_overflow_and_failed_replacement(tmp_path, monkeypatch):
+    path = tmp_path / "state"
+    movement.record_price(path, "usd", 60, 1, sys.float_info.min)
+    with pytest.raises(ValueError, match="cannot be represented"):
+        movement.record_price(path, "usd", 60, 2, sys.float_info.max)
+    contents = path.read_bytes()
+
+    def fail(source, destination, *, src_dir_fd=None, dst_dir_fd=None):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(movement.os, "replace", fail)
+    with pytest.raises(OSError):
+        movement.record_price(path, "usd", 60, 3, 10)
+    assert path.read_bytes() == contents
+    assert set(tmp_path.iterdir()) == {path, tmp_path / "state.lock"}
+
+
+@responses.activate
+@pytest.mark.parametrize(
+    "error", [requests.exceptions.SSLError("private"), 401, 503, None]
+)
+def test_ordered_failover(error, capsys):
+    second = "https://second.test/quote"
+    third = "https://third.test/quote"
+    args = ["--fallback-url", second, "--fallback-url", third, "--retries", "0"]
+    if error is None:
+        responses.add(responses.GET, DEFAULT_API_URL, json={"bitcoin": {"usd": 100}})
+    elif isinstance(error, Exception):
+        responses.add(responses.GET, DEFAULT_API_URL, body=error)
+    else:
+        responses.add(responses.GET, DEFAULT_API_URL, status=error)
+    responses.add(responses.GET, second, body=requests.ConnectionError("private"))
+    responses.add(responses.GET, third, json={"bitcoin": {"usd": 99}})
+    status = main(args)
+    output = capsys.readouterr().out
+    if error in (None, 503):
+        assert status == 0
+        assert ("source=primary" if error is None else "source=fallback2") in output
+    else:
+        assert status == 3
+        assert "private" not in output
+        assert len(responses.calls) == 1
+
+
+def test_busy_state_file_has_a_bounded_wait(tmp_path):
+    import fcntl
+
+    path = tmp_path / "state"
+    with (tmp_path / "state.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(BlockingIOError):
+            movement.record_price(path, "usd", 60, 10, 10)
+    assert not path.exists()
+
+
+def test_out_of_order_sample_is_rejected_without_losing_history(tmp_path):
+    path = tmp_path / "state"
+    movement.record_price(path, "usd", 60, 1000, 100)
+    movement.record_price(path, "usd", 60, 1070, 100)
+    before = path.read_text()
+    with pytest.raises(movement.OutOfOrderSampleError):
+        movement.record_price(path, "usd", 60, 1030, 90)
+    assert path.read_text() == before
+    assert movement.record_price(path, "usd", 60, 1070, 100) == (None, 0.0)
+
+
+@responses.activate
+def test_out_of_order_quote_is_unknown(tmp_path, monkeypatch, capsys):
+    args = ["--state-file", str(tmp_path / "state"), "--move-window", "60"]
+    for stamp, expected in [(1070, 0), (1030, 3)]:
+        monkeypatch.setattr(movement.time, "time", lambda now=stamp: now)
+        responses.upsert(
+            responses.GET,
+            DEFAULT_API_URL,
+            json={"bitcoin": {"usd": 100, "last_updated_at": stamp}},
+        )
+        assert main(args) == expected
+    assert "older than movement history" in capsys.readouterr().out
+
+
+@responses.activate
+def test_symlinked_state_files_are_refused(tmp_path, capsys):
+    target = tmp_path / "target"
+    target.write_text("{}")
+    state = tmp_path / "state"
+    state.symlink_to(target)
+    with pytest.raises(OSError, match="symbolic link"):
+        movement.record_price(state, "usd", 60, 1000, 100)
+    assert target.read_text() == "{}"
+    state.unlink()
+    lock = tmp_path / "state.lock"
+    lock.unlink()
+    lock.symlink_to(target)
+    with pytest.raises(OSError, match="symbolic link"):
+        movement.record_price(state, "usd", 60, 1000, 100)
+    assert not state.exists()
+
+
+def test_symlinked_parent_is_pinned_when_the_check_starts(tmp_path, monkeypatch):
+    real = tmp_path / "real"
+    other = tmp_path / "other"
+    real.mkdir()
+    other.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    path = link / "state"
+    original = movement.read_history
+
+    def retarget(directory, name):
+        # Redirect the ancestor after the directory was opened.
+        link.unlink()
+        link.symlink_to(other)
+        return original(directory, name)
+
+    monkeypatch.setattr(movement, "read_history", retarget)
+    assert movement.record_price(path, "usd", 60, 1000, 100) == (None, 0.0)
+    assert {entry.name for entry in real.iterdir()} == {"state", "state.lock"}
+    assert not list(other.iterdir())
+
+
+def test_stale_temporary_file_does_not_block_updates(tmp_path):
+    path = tmp_path / "state"
+    stale = tmp_path / ".state.tmp"
+    stale.write_text("partial")
+    assert movement.record_price(path, "usd", 60, 1000, 100) == (None, 0.0)
+    assert not stale.exists()
+    assert path.stat().st_mode & 0o077 == 0
+
+
+@pytest.mark.parametrize(
+    "extra, age, expected",
+    [([], 3600, 0), ([], 5400, 3), (["--max-age", "7200"], 5400, 0)],
+)
+@responses.activate
+def test_long_window_keeps_the_age_limit(
+    tmp_path, monkeypatch, capsys, extra, age, expected
+):
+    monkeypatch.setattr(movement.time, "time", lambda: 2_000_000_000)
+    responses.add(
+        responses.GET,
+        DEFAULT_API_URL,
+        json={"bitcoin": {"usd": 100, "last_updated_at": 2_000_000_000 - age}},
+    )
+    args = ["--state-file", str(tmp_path / "state"), "--move-window", "7200"]
+    assert main(args + extra) == expected
+    assert ("stale" in capsys.readouterr().out) == (expected == 3)

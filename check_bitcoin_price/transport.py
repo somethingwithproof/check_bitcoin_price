@@ -76,16 +76,26 @@ def fetch_with_retries(
                 if delay >= deadline - time.monotonic():
                     # Report the status that caused the wait, not a timeout.
                     response.raise_for_status()
-        except (requests.Timeout, requests.ConnectionError):
+        except (requests.Timeout, requests.ConnectionError) as exc:
             delay = retry_delay(None, attempt)
-            if attempt == retries or delay >= deadline - time.monotonic():
+            if (
+                attempt == retries
+                # A certificate failure will not heal on a retry.
+                or isinstance(exc, requests.exceptions.SSLError)
+                or delay >= deadline - time.monotonic()
+            ):
                 raise
         time.sleep(delay)
     raise requests.Timeout(TIMEOUT_MESSAGE)  # pragma: no cover
 
 
 def fetch_json(
-    url: str, params: dict[str, str], timeout: float, retries: int
+    url: str,
+    params: dict[str, str],
+    timeout: float,
+    retries: int,
+    *,
+    deadline: float | None = None,
 ) -> object:
     """Bound DNS, connect, body reads, decoding, and retries by one deadline.
 
@@ -94,7 +104,8 @@ def fetch_json(
     The worker owns and closes its response; it cannot print or submit more
     retries once its deadline expires. It does not block interpreter shutdown.
     """
-    deadline = time.monotonic() + timeout
+    if deadline is None:
+        deadline = time.monotonic() + timeout
     results: Queue[object] = Queue(maxsize=1)
 
     def retrieve() -> None:

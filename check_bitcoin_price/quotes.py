@@ -21,6 +21,7 @@ class PriceQuote:
     request_seconds: float
     age_seconds: float | None = None
     change_24h: float | None = None
+    timestamp: float | None = None
 
 
 def finite_number(value: object, label: str) -> float:
@@ -95,4 +96,10 @@ def parse_quote(
     change = (
         finite_number(raw_change, "24-hour change") if raw_change is not None else None
     )
-    return PriceQuote(price, request_seconds, age, change)
+    return PriceQuote(
+        price,
+        request_seconds,
+        age,
+        change,
+        float(bitcoin["last_updated_at"]) if age is not None else None,
+    )
