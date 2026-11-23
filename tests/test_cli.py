@@ -198,7 +198,7 @@ def test_slow_drip_cannot_extend_total_deadline(installed_cli, api_server):
         ("/oversize", "/ok", 3, "exceeds 64 KiB"),
         ("/rate-limit", "/oversize", 3, "exceeds 64 KiB"),
         ("/rate-limit", "/stale", 3, "stale"),
-        ("/rate-limit", "/rate-limit", 3, "timed out"),
+        ("/rate-limit", "/rate-limit", 3, "HTTP 429"),
     ],
 )
 def test_fallback_contract(installed_cli, api_server, primary, backup, code, detail):

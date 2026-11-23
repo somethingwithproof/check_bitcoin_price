@@ -119,7 +119,7 @@ def test_history_overflow_and_failed_replacement(tmp_path, monkeypatch):
         movement.record_price(path, "usd", 60, 2, sys.float_info.max)
     contents = path.read_bytes()
 
-    def fail(*args):
+    def fail(source, destination, *, src_dir_fd=None, dst_dir_fd=None):
         raise OSError("disk full")
 
     monkeypatch.setattr(movement.os, "replace", fail)
@@ -208,3 +208,34 @@ def test_symlinked_state_files_are_refused(tmp_path, capsys):
     with pytest.raises(OSError, match="symbolic link"):
         movement.record_price(state, "usd", 60, 1000, 100)
     assert not state.exists()
+
+
+def test_symlinked_parent_is_pinned_when_the_check_starts(tmp_path, monkeypatch):
+    real = tmp_path / "real"
+    other = tmp_path / "other"
+    real.mkdir()
+    other.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    path = link / "state"
+    original = movement.read_history
+
+    def retarget(directory, name):
+        # Redirect the ancestor after the directory was opened.
+        link.unlink()
+        link.symlink_to(other)
+        return original(directory, name)
+
+    monkeypatch.setattr(movement, "read_history", retarget)
+    assert movement.record_price(path, "usd", 60, 1000, 100) == (None, 0.0)
+    assert {entry.name for entry in real.iterdir()} == {"state", "state.lock"}
+    assert not list(other.iterdir())
+
+
+def test_stale_temporary_file_does_not_block_updates(tmp_path):
+    path = tmp_path / "state"
+    stale = tmp_path / ".state.tmp"
+    stale.write_text("partial")
+    assert movement.record_price(path, "usd", 60, 1000, 100) == (None, 0.0)
+    assert not stale.exists()
+    assert path.stat().st_mode & 0o077 == 0

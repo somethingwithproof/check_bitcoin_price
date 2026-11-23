@@ -11,6 +11,7 @@ and returns appropriate Nagios status codes based on configured thresholds.
 
 import argparse
 import math
+import re
 import sys
 import time
 from pathlib import Path
@@ -20,7 +21,12 @@ import requests
 
 from check_bitcoin_price import __version__
 from check_bitcoin_price.movement import OutOfOrderSampleError, record_price
-from check_bitcoin_price.quotes import PriceQuote, parse_price, parse_quote
+from check_bitcoin_price.quotes import (
+    PriceQuote,
+    parse_price,
+    parse_quote,
+    plain_number,
+)
 from check_bitcoin_price.transport import RETRYABLE_STATUS, fetch_json
 
 # Nagios exit codes
@@ -33,10 +39,18 @@ UNKNOWN = 3
 DEFAULT_API_URL = "https://api.coingecko.com/api/v3/simple/price"
 DEFAULT_TIMEOUT = 10
 DEFAULT_CURRENCY = "usd"
+# Applies to quotes that carry a vendor timestamp when --max-age is not given.
+DEFAULT_MAX_AGE = 3600
+# A looser pattern would let names such as last_updated_at select metadata.
+CURRENCY_CODE = re.compile(r"[a-z0-9]{2,16}", re.ASCII)
 
 
 class ConfigurationError(ValueError):
     """Invalid monitoring check configuration."""
+
+
+class MovementStateError(Exception):
+    """Movement history could not be read, ordered, or updated."""
 
 
 class PluginArgumentParser(argparse.ArgumentParser):
@@ -46,13 +60,30 @@ class PluginArgumentParser(argparse.ArgumentParser):
         raise ConfigurationError(message)
 
 
-def validate_thresholds(low: float | None, high: float | None) -> None:
+def validate_thresholds(
+    low: float | None,
+    high: float | None,
+    ordering: str = "Low threshold must not exceed high threshold",
+) -> None:
     """Require finite, nonnegative bounds in ascending order."""
     for value in (low, high):
         if value is not None and (not math.isfinite(value) or value < 0):
             raise ConfigurationError("Thresholds must be finite, nonnegative numbers")
     if low is not None and high is not None and low > high:
-        raise ConfigurationError("Low threshold must not exceed high threshold")
+        raise ConfigurationError(ordering)
+
+
+def may_succeed_elsewhere(error: requests.RequestException) -> bool:
+    """Whether a fallback source is worth trying after this failure."""
+    if isinstance(error, requests.HTTPError):
+        return (
+            error.response is not None
+            and error.response.status_code in RETRYABLE_STATUS
+        )
+    # A certificate failure is reported, not masked by a working fallback.
+    if isinstance(error, requests.exceptions.SSLError):
+        return False
+    return isinstance(error, (requests.ConnectionError, requests.Timeout))
 
 
 class ThresholdResult(NamedTuple):
@@ -81,6 +112,9 @@ class BitcoinPriceChecker:
             api_url: URL of the price API endpoint
             timeout: Request timeout in seconds
             currency: Currency to check price in (e.g., usd, eur, gbp)
+            retries: Additional attempts after a transient failure (0-5)
+            max_age: Maximum quote age in seconds; requires a vendor timestamp.
+                When None, timestamped quotes are limited to DEFAULT_MAX_AGE.
         """
         self.api_url = api_url
         self.fallback_urls = fallback_urls
@@ -93,6 +127,8 @@ class BitcoinPriceChecker:
             raise ConfigurationError("Maximum age must be finite and greater than zero")
         self.timeout = timeout
         self.currency = currency.lower()
+        if CURRENCY_CODE.fullmatch(self.currency) is None:
+            raise ConfigurationError("Currency must be 2-16 letters or digits")
         self.retries = retries
         self.max_age = max_age
 
@@ -120,7 +156,18 @@ class BitcoinPriceChecker:
         if require_change:
             params["include_24hr_change"] = "true"
         started = time.monotonic()
-        deadline = started + self.timeout
+        data = self.fetch_from_sources(params, started + self.timeout)
+        return parse_quote(
+            data,
+            self.currency,
+            time.monotonic() - started,
+            DEFAULT_MAX_AGE if self.max_age is None else self.max_age,
+            require_change,
+            require_timestamp=self.max_age is not None,
+        )
+
+    def fetch_from_sources(self, params: dict[str, str], deadline: float) -> object:
+        """Try each source in order until one answers or fails permanently."""
         sources = (self.api_url, *self.fallback_urls)
         for index, url in enumerate(sources):
             self.source = f"fallback{index}" if index else "primary"
@@ -128,30 +175,12 @@ class BitcoinPriceChecker:
             # A slow endpoint can consume only its share of the remaining time.
             share = (deadline - now) / (len(sources) - index)
             try:
-                data = fetch_json(
+                return fetch_json(
                     url, params, share, self.retries, deadline=now + share
                 )
-            except requests.HTTPError as exc:
-                if (
-                    exc.response is None
-                    or exc.response.status_code not in RETRYABLE_STATUS
-                ):
+            except requests.RequestException as exc:
+                if index == len(sources) - 1 or not may_succeed_elsewhere(exc):
                     raise
-                if index == len(sources) - 1:
-                    raise
-            except requests.exceptions.SSLError:
-                raise
-            except (requests.ConnectionError, requests.Timeout):
-                if index == len(sources) - 1:
-                    raise
-            else:
-                return parse_quote(
-                    data,
-                    self.currency,
-                    time.monotonic() - started,
-                    self.max_age,
-                    require_change,
-                )
         raise AssertionError("unreachable")  # pragma: no cover
 
     def check_thresholds(
@@ -268,7 +297,7 @@ Examples:
         "--currency",
         type=str,
         default=DEFAULT_CURRENCY,
-        help=f"Currency to check price in (default: {DEFAULT_CURRENCY})",
+        help=f"Currency code, 2-16 letters or digits (default: {DEFAULT_CURRENCY})",
     )
     parser.add_argument(
         "--timeout",
@@ -282,7 +311,8 @@ Examples:
     parser.add_argument(
         "--max-age",
         type=float,
-        help="Maximum quote age in seconds; require vendor timestamp",
+        help=f"Maximum quote age in seconds; require vendor timestamp "
+        f"(default: {DEFAULT_MAX_AGE} when the quote has a timestamp)",
     )
     parser.add_argument(
         "--warning-change",
@@ -395,7 +425,7 @@ def check_change(
             return ThresholdResult(
                 status,
                 f"{label} - Bitcoin {label_period} change {change:+.2f}% exceeds "
-                f"{label.lower()} limit {limit:g}%",
+                f"{label.lower()} limit {plain_number(limit)}%",
             )
     return ThresholdResult(OK, "OK")
 
@@ -404,8 +434,8 @@ def performance_range(low: float | None, high: float | None) -> str:
     """Represent existing price bounds using Nagios range syntax."""
     if low is None and high is None:
         return ""
-    upper = f"{high:g}" if high is not None else ""
-    return f"{low if low is not None else 0:g}:{upper}"
+    upper = plain_number(high) if high is not None else ""
+    return f"{plain_number(low if low is not None else 0)}:{upper}"
 
 
 def performance_data(
@@ -436,21 +466,20 @@ def change_metric(
     name: str, change: float | None, warning: float | None, critical: float | None
 ) -> str:
     value = "U" if change is None else f"{change:.2f}"
-    warn = "" if warning is None else f"{-warning:g}:{warning:g}"
-    crit = "" if critical is None else f"{-critical:g}:{critical:g}"
+    warn, crit = (
+        "" if limit is None else f"{plain_number(-limit)}:{plain_number(limit)}"
+        for limit in (warning, critical)
+    )
     return f"{name}={value}%;{warn};{crit};;"
 
 
-def run_check(parsed_args: argparse.Namespace) -> ThresholdResult:
-    """Validate configuration, fetch once, and evaluate all requested metrics."""
-    warning = resolve_thresholds(
-        parsed_args.warning, parsed_args.warning_low, parsed_args.warning_high
+def movement_window(parsed_args: argparse.Namespace) -> float:
+    """Validate the movement options and return the window in seconds."""
+    validate_thresholds(
+        parsed_args.warning_move,
+        parsed_args.critical_move,
+        "Warning move must not exceed critical move",
     )
-    critical = resolve_thresholds(
-        parsed_args.critical, parsed_args.critical_low, parsed_args.critical_high
-    )
-    validate_thresholds(parsed_args.warning_change, parsed_args.critical_change)
-    validate_thresholds(parsed_args.warning_move, parsed_args.critical_move)
     move_options = (
         parsed_args.warning_move,
         parsed_args.critical_move,
@@ -461,6 +490,36 @@ def run_check(parsed_args: argparse.Namespace) -> ThresholdResult:
     window = 3600.0 if parsed_args.move_window is None else parsed_args.move_window
     if not math.isfinite(window) or window <= 0:
         raise ConfigurationError("Movement window must be finite and positive")
+    return float(window)
+
+
+def window_movement(
+    state_file: Path, currency: str, window: float, timestamp: float, price: float
+) -> tuple[float | None, str]:
+    """Record the quote; return its movement and the period that covers."""
+    try:
+        move, elapsed = record_price(state_file, currency, window, timestamp, price)
+    except OutOfOrderSampleError as exc:
+        raise MovementStateError("Quote is older than movement history") from exc
+    except OSError as exc:
+        raise MovementStateError("Cannot update movement history") from exc
+    return move, f"{elapsed:g}s"
+
+
+def run_check(parsed_args: argparse.Namespace) -> ThresholdResult:
+    """Validate configuration, fetch once, and evaluate all requested metrics."""
+    warning = resolve_thresholds(
+        parsed_args.warning, parsed_args.warning_low, parsed_args.warning_high
+    )
+    critical = resolve_thresholds(
+        parsed_args.critical, parsed_args.critical_low, parsed_args.critical_high
+    )
+    validate_thresholds(
+        parsed_args.warning_change,
+        parsed_args.critical_change,
+        "Warning change must not exceed critical change",
+    )
+    window = movement_window(parsed_args)
     checker = BitcoinPriceChecker(
         api_url=parsed_args.api_url,
         timeout=parsed_args.timeout,
@@ -498,31 +557,22 @@ def run_check(parsed_args: argparse.Namespace) -> ThresholdResult:
         if parsed_args.verbose:
             print(f"Quote received from {checker.source}", file=sys.stderr)
     if parsed_args.state_file is not None and quote.timestamp is not None:
-        try:
-            move, elapsed = record_price(
-                parsed_args.state_file,
-                checker.currency,
-                window,
-                quote.timestamp,
-                quote.price,
-            )
-        except OutOfOrderSampleError:
-            return ThresholdResult(
-                UNKNOWN, "UNKNOWN - Quote is older than movement history"
-            )
-        except OSError:
-            return ThresholdResult(UNKNOWN, "UNKNOWN - Cannot update movement history")
-        period = f"{elapsed:g}s"
-        if move is None:
+        move, period = window_movement(
+            parsed_args.state_file,
+            checker.currency,
+            window,
+            quote.timestamp,
+            quote.price,
+        )
+        window_result = check_change(
+            move, parsed_args.warning_move, parsed_args.critical_move, period
+        )
+        if window_result.status > result.status:
+            result = window_result
+        elif move is None:
             details.append("movement baseline pending")
         else:
-            window_result = check_change(
-                move, parsed_args.warning_move, parsed_args.critical_move, period
-            )
-            if window_result.status > result.status:
-                result = window_result
-            else:
-                details.append(f"move={move:+.2f}% over {period}")
+            details.append(f"move={move:+.2f}% over {period}")
         perfdata += " " + change_metric(
             "bitcoin_move_window",
             move,
@@ -551,6 +601,9 @@ def main(args: list | None = None) -> int:
 
     except ConfigurationError as e:
         print(f"UNKNOWN - Invalid configuration: {e}")
+        return UNKNOWN
+    except MovementStateError as e:
+        print(f"UNKNOWN - {e}")
         return UNKNOWN
     except requests.Timeout:
         print("UNKNOWN - API request timed out")

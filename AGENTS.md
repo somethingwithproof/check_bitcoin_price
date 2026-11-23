@@ -36,9 +36,12 @@ packages. Those commands do not authorize release publication.
 
 Preserve Nagios exit codes, single status-line output, performance data and
 existing CLI aliases. Stale/future/malformed/missing prices or timestamps must
-not imply OK. Match movement data to the selected currency; retain signed
+not imply OK; timestamped quotes have a one-hour default age limit. Match
+movement data to the selected currency and validate the currency code; retain signed
 movement and highest-severity behavior. Bound the total retry deadline and
-response size; preserve TLS verification and safe error messages.
+response size; preserve TLS verification and safe error messages. Report the
+last real failure when a retry wait cannot fit. Print thresholds in plain
+decimal notation in performance data.
 
 Tests must use mocked responses or a local HTTP server, never live market data
 or stored vendor credentials. Keep meaningful coverage/failure-path tests; do
@@ -49,7 +52,8 @@ not weaken the configured threshold to accommodate new code.
 The version in `check_bitcoin_price/__init__.py` is the sole version source.
 `packaging/nfpm.yaml` and `scripts/build_native_packages.py` create native
 packages; `scripts/validate_release.py` checks stable SemVer tags. Preserve
-wheel/source/deb/rpm verification, `SHA256SUMS` and exact-main-tag publication.
+wheel/source/deb/rpm verification, `SHA256SUMS`, provenance attestation and
+exact-main-tag publication. The packaged wrapper must keep Python in isolated mode.
 Follow `CONTRIBUTING.md` for authorized releases; never overwrite published assets.
 
 ## Working rules

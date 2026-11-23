@@ -28,6 +28,11 @@ contents:
   - src: /usr/bin/check_bitcoin_price
     dst: /usr/lib/nagios/plugins/check_bitcoin_price
     type: symlink
+  # Fedora and RHEL keep Nagios plugins in the 64-bit library directory.
+  - src: /usr/bin/check_bitcoin_price
+    dst: /usr/lib64/nagios/plugins/check_bitcoin_price
+    type: symlink
+    packager: rpm
   - src: LICENSE
     dst: /usr/share/licenses/check-bitcoin-price/LICENSE
     type: license
