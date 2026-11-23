@@ -31,13 +31,13 @@ Download `.deb`, `.rpm`, `.tar.gz`, wheel, and `SHA256SUMS` files from [GitHub R
 
 ```bash
 # Debian/Ubuntu with Python >=3.12 (for example Ubuntu 24.04)
-sudo apt install ./check-bitcoin-price_1.0.0-1_all.deb
+sudo apt install ./check-bitcoin-price_2.0.0-1_all.deb
 
 # Fedora or another RPM distribution with Python >=3.12
-sudo dnf install ./check-bitcoin-price-1.0.0-1.noarch.rpm
+sudo dnf install ./check-bitcoin-price-2.0.0-1.noarch.rpm
 
 # Python source archive
-pip install ./check_bitcoin_price-1.0.0.tar.gz
+pip install ./check_bitcoin_price-2.0.0.tar.gz
 ```
 
 Use the filenames from the selected release. Native packages install `/usr/bin/check_bitcoin_price` and `/usr/lib/nagios/plugins/check_bitcoin_price`; the RPM also provides `/usr/lib64/nagios/plugins/check_bitcoin_price`. The packaged command runs Python in isolated mode, so it ignores `PYTHONPATH` and modules in the working directory; the system package manager resolves Python and `requests` dependencies. They contain architecture-independent Python code and require a distribution providing Python 3.12 or newer.
@@ -331,7 +331,7 @@ monitoring host; they do not make the quote itself trustworthy.
 
 ## Upgrading from 1.0.0
 
-These changes are not yet in a tagged release.
+These changes ship in 2.0.0.
 
 - A quote with a vendor timestamp older than one hour returns `UNKNOWN` unless a
   larger `--max-age` is given. Endpoints that return no timestamp are unaffected.

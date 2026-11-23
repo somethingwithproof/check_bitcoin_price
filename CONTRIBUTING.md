@@ -38,8 +38,8 @@ Stable releases use SemVer `MAJOR.MINOR.PATCH`: increment MAJOR for incompatible
 3. From the merged commit on `main`, create and push the matching annotated tag:
 
    ```bash
-   git tag -a v1.0.0 -m 'Release v1.0.0'
-   git push origin v1.0.0
+   git tag -a v2.0.0 -m 'Release v2.0.0'
+   git push origin v2.0.0
    ```
 
 The Release workflow rejects invalid tags, package/tag version mismatches, and commits outside `main`. It reruns lint, types, tests, coverage, and security audits; builds the wheel, source `.tar.gz`, architecture-independent `.deb` and `.rpm`; and tests native installation before publishing. GitHub generates release notes from merged PRs. `SHA256SUMS` covers all four assets. The publish job verifies it, then attests build provenance for each listed asset, which requires the `id-token: write` and `attestations: write` permissions on that job only.
