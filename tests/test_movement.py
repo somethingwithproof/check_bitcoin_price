@@ -239,3 +239,22 @@ def test_stale_temporary_file_does_not_block_updates(tmp_path):
     assert movement.record_price(path, "usd", 60, 1000, 100) == (None, 0.0)
     assert not stale.exists()
     assert path.stat().st_mode & 0o077 == 0
+
+
+@pytest.mark.parametrize(
+    "extra, age, expected",
+    [([], 3600, 0), ([], 5400, 3), (["--max-age", "7200"], 5400, 0)],
+)
+@responses.activate
+def test_long_window_keeps_the_age_limit(
+    tmp_path, monkeypatch, capsys, extra, age, expected
+):
+    monkeypatch.setattr(movement.time, "time", lambda: 2_000_000_000)
+    responses.add(
+        responses.GET,
+        DEFAULT_API_URL,
+        json={"bitcoin": {"usd": 100, "last_updated_at": 2_000_000_000 - age}},
+    )
+    args = ["--state-file", str(tmp_path / "state"), "--move-window", "7200"]
+    assert main(args + extra) == expected
+    assert ("stale" in capsys.readouterr().out) == (expected == 3)

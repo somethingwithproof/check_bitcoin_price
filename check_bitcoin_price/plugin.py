@@ -529,7 +529,10 @@ def run_check(parsed_args: argparse.Namespace) -> ThresholdResult:
         fallback_urls=tuple(parsed_args.fallback_url),
     )
     if parsed_args.state_file is not None:
-        checker.max_age = min(checker.max_age or window, window)
+        # Movement needs a timestamp inside the window, but a long window must
+        # not loosen the default age limit.
+        limit = DEFAULT_MAX_AGE if checker.max_age is None else checker.max_age
+        checker.max_age = min(limit, window)
     if parsed_args.verbose:
         print("Fetching Bitcoin price...", file=sys.stderr)
     require_change = (

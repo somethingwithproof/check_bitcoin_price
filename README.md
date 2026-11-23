@@ -152,7 +152,8 @@ Give the monitoring user a private writable state directory on a local Linux or
 macOS filesystem. Keep the sibling `.lock` file in place between checks. Use a
 separate state file per window. Currencies have independent histories inside it.
 The default window is 3600 seconds. Each valid quote needs a vendor timestamp
-within the window and any stricter `--max-age`. The plugin compares the current
+within the window and the age limit, which is one hour unless `--max-age` sets
+another. The plugin compares the current
 price with the oldest earlier positive price in that window and reports the
 actual elapsed seconds. Repeated timestamps do not create additional samples.
 A first sample, expired history, or corrupt JSON starts a new baseline; the
