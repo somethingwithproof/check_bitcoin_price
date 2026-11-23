@@ -29,7 +29,7 @@ jobs:
     outputs:
       commit: ${{ steps.verify.outputs.commit }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.tag || github.ref_name }}
           fetch-depth: 0
@@ -66,6 +66,8 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
@@ -75,13 +77,20 @@ jobs:
         with:
           name: release-assets
           path: dist
+      - name: Verify asset checksums
+        working-directory: dist
+        run: sha256sum --check SHA256SUMS
+      # Signed provenance lets users confirm that an asset came from this
+      # workflow; SHA256SUMS alone only detects corruption.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
       - name: Publish tested assets with generated release notes
         shell: bash
         run: |
           set -euo pipefail
           test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)" = "$RELEASE_COMMIT"
           cd dist
-          sha256sum --check SHA256SUMS
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft > draft-state; then
             # Published assets remain immutable. Only unfinished drafts can resume.
             test "$(cat draft-state)" = "true"

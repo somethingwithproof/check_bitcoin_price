@@ -1,3 +1,12 @@
 #!/bin/sh
-export PYTHONPATH="/usr/share/check-bitcoin-price${PYTHONPATH:+:$PYTHONPATH}"
-exec /usr/bin/python3 -m check_bitcoin_price.plugin "$@"
+# Isolated mode keeps the working directory, PYTHON* variables, and the user
+# site directory off sys.path, so only system packages and this tree import.
+exec /usr/bin/python3 -I -c '
+import sys
+
+sys.path.insert(0, "/usr/share/check-bitcoin-price")
+sys.argv[0] = "check_bitcoin_price"
+from check_bitcoin_price.plugin import main
+
+sys.exit(main())
+' "$@"
