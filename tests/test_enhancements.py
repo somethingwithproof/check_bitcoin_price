@@ -215,7 +215,7 @@ def test_retry_count_is_bounded(retries, calls, instant_backoff):
 
 
 @responses.activate
-def test_retry_after_does_not_exceed_deadline():
+def test_retry_after_does_not_exceed_deadline(capsys):
     responses.add(
         responses.GET, DEFAULT_API_URL, status=429, headers={"Retry-After": "60"}
     )
@@ -223,6 +223,15 @@ def test_retry_after_does_not_exceed_deadline():
     assert main(["--timeout", "0.2"]) == UNKNOWN
     assert time.monotonic() - started < 0.5
     assert len(responses.calls) == 1
+    assert "HTTP 429" in capsys.readouterr().out
+
+
+@responses.activate
+def test_unaffordable_backoff_reports_the_connection_failure(capsys):
+    responses.add(responses.GET, DEFAULT_API_URL, body=requests.ConnectionError())
+    assert main(["--timeout", "0.2"]) == UNKNOWN
+    assert len(responses.calls) == 1
+    assert "ConnectionError" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(
@@ -278,6 +287,9 @@ def test_expired_budget_never_starts_a_request():
         ["--warning-change=-1"],
         ["--critical-change", "nan"],
         ["--warning-change", "10", "--critical-change", "5"],
+        ["--currency", "last_updated_at"],
+        ["--currency", "u"],
+        ["--currency", ""],
     ],
 )
 @responses.activate
@@ -285,3 +297,100 @@ def test_new_configuration_is_validated_before_requests(args, capsys):
     assert main(args) == UNKNOWN
     assert "Invalid configuration" in capsys.readouterr().out
     assert not responses.calls
+
+
+def test_change_limit_order_is_named(capsys):
+    assert main(["--warning-change", "10", "--critical-change", "5"]) == UNKNOWN
+    assert "Warning change must not exceed critical change" in capsys.readouterr().out
+
+
+@responses.activate
+def test_missing_currency_is_named(capsys):
+    responses.add(responses.GET, DEFAULT_API_URL, json={"bitcoin": {"usd": 40000}})
+    assert main(["--currency", "eur"]) == UNKNOWN
+    assert "Response has no EUR price" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("age, expected", [(3600, OK), (3601, UNKNOWN)])
+@responses.activate
+def test_timestamped_quotes_have_a_default_age_limit(
+    age, expected, monkeypatch, capsys
+):
+    monkeypatch.setattr(quotes.time, "time", lambda: 2_000_000_000)
+    responses.add(
+        responses.GET,
+        DEFAULT_API_URL,
+        json={"bitcoin": {"usd": 40000, "last_updated_at": 2_000_000_000 - age}},
+    )
+    assert main([]) == expected
+    assert ("stale" in capsys.readouterr().out) == (expected == UNKNOWN)
+
+
+@pytest.mark.parametrize(
+    "price, expected",
+    [("40000.5", OK), ("4e4", OK), ("40_000", UNKNOWN), (" 40000", UNKNOWN)],
+)
+@responses.activate
+def test_numeric_strings_must_be_plain_decimals(price, expected):
+    responses.add(responses.GET, DEFAULT_API_URL, json={"bitcoin": {"usd": price}})
+    assert main([]) == expected
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (16250000.0, "16250000"),
+        (123456.78, "123456.78"),
+        (1e22, "10000000000000000000000"),
+        (0.5, "0.5"),
+        (-0.0, "0"),
+    ],
+)
+def test_plain_number_avoids_exponents_and_rounding(value, expected):
+    assert quotes.plain_number(value) == expected
+
+
+@responses.activate
+def test_large_thresholds_keep_full_precision_in_output(capsys):
+    responses.add(
+        responses.GET,
+        DEFAULT_API_URL,
+        json={"bitcoin": {"jpy": 15000000, "jpy_24h_change": 3}},
+    )
+    args = ["--currency", "jpy", "-w", "14500000:16250000", "--warning-change", "2.5"]
+    assert main(args) == WARNING
+    output = capsys.readouterr().out
+    assert "limit 2.5%" in output
+    assert "bitcoin_price=15000000.00;14500000:16250000;;0;" in output
+    assert "bitcoin_change_24h=3.00%;-2.5:2.5;;;" in output
+
+
+@responses.activate
+@pytest.mark.parametrize("extra", [0, 1])
+def test_response_limit_applies_to_decoded_bytes(extra):
+    body = b"{}" + b" " * (transport.MAX_RESPONSE_BYTES - 2 + extra)
+    responses.add(responses.GET, DEFAULT_API_URL, body=body)
+    if extra:
+        with pytest.raises(ValueError, match="exceeds 64 KiB"):
+            transport.fetch_json(DEFAULT_API_URL, {}, 1, 0)
+    else:
+        assert transport.fetch_json(DEFAULT_API_URL, {}, 1, 0) == {}
+
+
+@responses.activate
+def test_deadline_expires_while_reading_body(monkeypatch):
+    ticks = iter([0, 1])
+    monkeypatch.setattr(transport.time, "monotonic", lambda: next(ticks))
+    responses.add(responses.GET, DEFAULT_API_URL, body=b"{}")
+    with pytest.raises(requests.Timeout, match="Total timeout expired"):
+        transport.fetch_with_retries(DEFAULT_API_URL, {}, 1, 0)
+
+
+@responses.activate
+def test_redirect_is_followed_to_the_quote():
+    target = "https://quotes.example.org/price"
+    responses.add(
+        responses.GET, DEFAULT_API_URL, status=302, headers={"Location": target}
+    )
+    responses.add(responses.GET, target, json={"bitcoin": {"usd": 40000}})
+    assert BitcoinPriceChecker().get_bitcoin_price() == 40000

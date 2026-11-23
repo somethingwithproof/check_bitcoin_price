@@ -17,8 +17,9 @@ A Nagios/Icinga plugin to monitor Bitcoin price with configurable warning and cr
 - Uses CoinGecko API (free, no API key required)
 - Support for custom API endpoints
 - Configurable timeout
-- Quote freshness checks using vendor timestamps
+- Quote freshness checks using vendor timestamps, with a one-hour default limit
 - Bounded retries for rate limits and temporary API failures
+- One deadline for all attempts and a 64 KiB cap on each response
 - Optional alerts on absolute 24-hour percentage movement
 - Price thresholds, request duration, and quote age in performance data
 
@@ -26,7 +27,7 @@ A Nagios/Icinga plugin to monitor Bitcoin price with configurable warning and cr
 
 ### From GitHub Releases
 
-Download `.deb`, `.rpm`, `.tar.gz`, wheel, and `SHA256SUMS` files from [GitHub Releases](https://github.com/somethingwithproof/check_bitcoin_price/releases). Verify a download with `sha256sum --ignore-missing --check SHA256SUMS`.
+Download `.deb`, `.rpm`, `.tar.gz`, wheel, and `SHA256SUMS` files from [GitHub Releases](https://github.com/somethingwithproof/check_bitcoin_price/releases). Verify a download with `sha256sum --ignore-missing --check SHA256SUMS`. Releases after 1.0.0 also carry signed build provenance; confirm an asset came from this repository's release workflow with `gh attestation verify <file> --repo somethingwithproof/check_bitcoin_price`.
 
 ```bash
 # Debian/Ubuntu with Python >=3.12 (for example Ubuntu 24.04)
@@ -39,7 +40,7 @@ sudo dnf install ./check-bitcoin-price-1.0.0-1.noarch.rpm
 pip install ./check_bitcoin_price-1.0.0.tar.gz
 ```
 
-Use the filenames from the selected release. Native packages install `/usr/bin/check_bitcoin_price` and `/usr/lib/nagios/plugins/check_bitcoin_price`; the system package manager resolves Python and `requests` dependencies. They contain architecture-independent Python code and require a distribution providing Python 3.12 or newer.
+Use the filenames from the selected release. Native packages install `/usr/bin/check_bitcoin_price` and `/usr/lib/nagios/plugins/check_bitcoin_price`; the RPM also provides `/usr/lib64/nagios/plugins/check_bitcoin_price`. The packaged command runs Python in isolated mode, so it ignores `PYTHONPATH` and modules in the working directory; the system package manager resolves Python and `requests` dependencies. They contain architecture-independent Python code and require a distribution providing Python 3.12 or newer.
 
 ### From Source
 
@@ -112,18 +113,22 @@ check_bitcoin_price --timeout 30
 check_bitcoin_price --max-age 300 --timeout 10 --retries 2
 ```
 
-Freshness is opt-in for compatibility with custom endpoints that return only a
-price. With `--max-age`, missing, invalid, future, or stale vendor timestamps
-return `UNKNOWN`; the plugin does not substitute the local fetch time for the
-vendor's quote time. A timestamp exactly at the age limit remains acceptable.
+A quote that carries a vendor timestamp must be at most one hour old by default.
+Endpoints that return only a price remain usable when `--max-age` is absent.
+With `--max-age`, missing, invalid, future, or stale vendor timestamps return
+`UNKNOWN`; the plugin does not substitute the local fetch time for the vendor's
+quote time. A timestamp exactly at the age limit remains acceptable. Future
+timestamps are always rejected.
 
 The default allows one retry. Only connection errors, timeouts, and HTTP
 408/429/500/502/503/504 responses are retried. Backoff starts at 0.5 seconds and
 doubles for subsequent retries; `Retry-After` seconds and HTTP dates take
 precedence. All attempts, response reads, JSON decoding, and retry waits share
-the `--timeout` budget. A retry wait that cannot fit returns `UNKNOWN` immediately.
-Authentication failures, other permanent HTTP errors, and invalid JSON are not
-retried. Use `--retries 0` to disable retries.
+the `--timeout` budget. A retry wait that cannot fit returns `UNKNOWN` immediately
+and reports the failure that prompted it, such as `HTTP 429` or `ConnectionError`,
+not a timeout. Authentication failures, other permanent HTTP errors, invalid
+JSON, and responses larger than 64 KiB of decoded data are not retried. Use
+`--retries 0` to disable retries.
 
 ### Daily Percentage Movement
 
@@ -149,10 +154,10 @@ when severities match.
 | `--warning-high` | Warning threshold for high price |
 | `--critical-low` | Critical threshold for low price |
 | `--critical-high` | Critical threshold for high price |
-| `--currency` | Currency to check price in (default: usd) |
+| `--currency` | Currency code of 2-16 letters or digits (default: usd) |
 | `--timeout` | Total API request/retry budget in seconds, including fractional values (default: 10) |
 | `--retries` | Additional transient attempts, 0–5 (default: 1) |
-| `--max-age` | Maximum vendor quote age in seconds; disabled by default |
+| `--max-age` | Maximum vendor quote age in seconds and require a timestamp; timestamped quotes default to 3600 |
 | `--warning-change` | Warning limit for absolute 24-hour percentage movement |
 | `--critical-change` | Critical limit for absolute 24-hour percentage movement |
 | `--api-url` | Custom API URL |
@@ -214,9 +219,12 @@ object Service "bitcoin-price" {
 
 Invalid arguments, nonpositive timeouts, invalid threshold ranges, and malformed
 API prices return `UNKNOWN` (exit 3). Thresholds must be finite, nonnegative
-numbers, with each low bound no greater than its high bound. Invalid configuration
-is rejected before contacting the API. Prices must be finite and nonnegative;
-invalid responses do not emit performance data. Verbose diagnostics go to stderr
+numbers, with each low bound no greater than its high bound. The currency must
+be 2-16 letters or digits. Invalid configuration is rejected before contacting
+the API. Prices must be finite and nonnegative, given as JSON numbers or plain
+decimal strings such as `"43521.5"`. A response without the requested currency
+names it, for example `Response has no EUR price`. Invalid responses do not emit
+performance data. Verbose diagnostics go to stderr
 so stdout contains a single monitoring status line.
 
 | Code | Status | Description |
@@ -234,8 +242,9 @@ The plugin outputs performance data in standard Nagios format:
 bitcoin_price=43521.00;30000:50000;25000:60000;0; request_time=0.125s;;;0; price_age=20.000s;;;0; bitcoin_change_24h=-6.00%;-5:5;-10:10;;
 ```
 
-Price performance data now includes the configured warning/critical ranges and
-a minimum of zero. Request time includes all attempts and backoff. Quote age is
+Price performance data includes the configured warning/critical ranges and a
+minimum of zero. Thresholds are printed in full decimal notation, never rounded
+or in exponent form, so large values such as `14500000:16250000` stay parseable. Request time includes all attempts and backoff. Quote age is
 emitted only when the vendor supplies a valid timestamp; daily change is emitted
 when available. Change ranges are symmetric around zero. Invalid or stale data
 produces `UNKNOWN` without price performance data. These metrics can be used with
@@ -248,9 +257,46 @@ This plugin uses the [CoinGecko API](https://www.coingecko.com/en/api) by defaul
 Custom endpoints must use the same response shape: `bitcoin.<currency>` for
 price, `bitcoin.last_updated_at` for UNIX timestamp seconds, and
 `bitcoin.<currency>_24h_change` for signed daily percentage movement. Only price
-is required when freshness and movement alerts are disabled.
+is required when `--max-age` and the change thresholds are absent. A timestamp
+that is present is still checked: it must not be in the future or more than one
+hour old. The decoded response must fit in 64 KiB.
 
 Supported currencies include: usd, eur, gbp, jpy, aud, cad, chf, cny, and many more.
+
+## Security
+
+The measures below are implemented in the current code. They limit what a misbehaving endpoint or a local user can do to the
+monitoring host; they do not make the quote itself trustworthy.
+
+- HTTPS certificates are verified with the `requests` defaults, and no option
+  disables verification. A custom `--api-url` that uses plain `http://` has no
+  such protection.
+- DNS, connection, reads, retries, and backoff share the `--timeout` deadline. A
+  peer that sends data slowly cannot extend it.
+- Each response is limited to 64 KiB after decompression, and redirect bodies
+  are discarded unread.
+- Request failures print only an HTTP status or an error class, because a custom
+  `--api-url` may contain credentials.
+- The command installed by the `.deb` and `.rpm` runs Python in isolated mode.
+  It ignores `PYTHONPATH`, the user site directory, and modules in the working
+  directory. A `pip` installation uses the standard console script and follows
+  the environment it is installed in.
+- Release assets carry build provenance attestations in addition to
+  `SHA256SUMS`; see [From GitHub Releases](#from-github-releases).
+
+## Upgrading from 1.0.0
+
+These changes are not yet in a tagged release.
+
+- A quote with a vendor timestamp older than one hour returns `UNKNOWN` unless a
+  larger `--max-age` is given. Endpoints that return no timestamp are unaffected.
+- `--currency` accepts only 2-16 letters or digits.
+- Numeric strings with digit separators or surrounding spaces are rejected.
+- A retry wait that does not fit the budget reports the underlying failure
+  instead of `API request timed out`.
+- The native packages no longer honor `PYTHONPATH`.
+- Thresholds of one million or more appear in performance data as plain
+  decimals instead of exponent notation.
 
 ## Development
 
@@ -274,7 +320,7 @@ mise exec -- uv run --frozen --no-sync --no-build pre-commit run --all-files
 
 Use `mise exec -- uv add --dev <tool>` or `mise exec -- uv add <dependency>` to update dependencies and commit both `pyproject.toml` and `uv.lock`.
 
-CI checks Python 3.12 and 3.13 on Linux and Python 3.13 on macOS. Every PR also runs package validation, dependency auditing, and CodeQL. Built distributions are available as the `distributions` artifact on CI runs.
+CI checks Python 3.12 and 3.13 on Linux and Python 3.13 on macOS. Every PR also runs package validation, dependency auditing, and CodeQL, and installs the `.deb` on Ubuntu and the `.rpm` on Fedora. Built distributions are available as the `distributions` artifact on CI runs.
 
 The package and CLI version comes from `check_bitcoin_price/__init__.py`. See [the release process](CONTRIBUTING.md#releases) for version bumps and automated publication of GitHub release assets.
 
