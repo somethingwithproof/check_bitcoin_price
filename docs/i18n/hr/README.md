@@ -122,7 +122,7 @@ check_bitcoin_price --max-age 300 --timeout 10 --retries 2
 ```
 
 Kotacija koja nosi vremensku oznaku pružatelja zadano smije biti stara najviše jedan sat.
-Krajnje točke koje vraćaju samo cijenu ostaju upotrebljive kada `--max-age` nije naveden.
+Krajnje točke koje vraćaju samo cijenu ostaju upotrebljive kada `--max-age` i `--state-file` nisu navedeni.
 Uz `--max-age`, nedostajuće, nevaljane, buduće ili zastarjele vremenske oznake pružatelja vraćaju `UNKNOWN`; dodatak ne zamjenjuje vrijeme kotacije pružatelja lokalnim vremenom dohvaćanja. Vremenska oznaka točno na granici starosti ostaje prihvatljiva. Buduće vremenske oznake uvijek se odbijaju.
 
 Zadano je dopušten jedan ponovni pokušaj. Ponavljaju se samo pogreške mrežne veze, isteci vremena čekanja i HTTP odgovori 408/429/500/502/503/504. Odgoda započinje s 0.5 sekundi i udvostručuje se za sljedeće pokušaje; sekunde iz zaglavlja `Retry-After` i HTTP datumi imaju prednost. Svi pokušaji, čitanje odgovora, dekodiranje JSON-a i čekanja između pokušaja dijele ukupni `--timeout` proračun. Čekanje ponovnog pokušaja koje ne stane u proračun odmah vraća `UNKNOWN` i u izvješću navodi pogrešku koja ga je potaknula, poput `HTTP 429` ili `ConnectionError`, a ne istek vremena. Pogreške autentifikacije, druge trajne HTTP pogreške, nevaljan JSON i odgovori veći od 64 KiB dekodiranih podataka ne ponavljaju se. Upotrijebite `--retries 0` za isključivanje ponovnih pokušaja.
@@ -253,7 +253,7 @@ Podatci o učinkovitosti za cijenu uključuju podešene raspone upozorenja/kriti
 
 Ovaj dodatak zadano upotrebljava [CoinGecko API](https://www.coingecko.com/en/api), koji je besplatan i ne zahtijeva API ključ. Primjenjuju se ograničenja broja zahtjeva.
 
-Prilagođene krajnje točke moraju koristiti isti oblik odgovora: `bitcoin.<currency>` za cijenu, `bitcoin.last_updated_at` za sekunde UNIX vremenske oznake i `bitcoin.<currency>_24h_change` za predznačeno dnevno postotno kretanje. Samo cijena je obvezna kada `--max-age` i pragovi promjene nisu navedeni. Prisutna vremenska oznaka ipak se provjerava: ne smije biti u budućnosti ni starija od jednog sata. Dekodirani odgovor mora stati u 64 KiB.
+Prilagođene krajnje točke moraju koristiti isti oblik odgovora: `bitcoin.<currency>` za cijenu, `bitcoin.last_updated_at` za sekunde UNIX vremenske oznake i `bitcoin.<currency>_24h_change` za predznačeno dnevno postotno kretanje. Samo cijena je obvezna kada `--max-age`, `--state-file` i pragovi promjene nisu navedeni. Prisutna vremenska oznaka ipak se provjerava: ne smije biti u budućnosti ni starija od jednog sata. Dekodirani odgovor mora stati u 64 KiB.
 
 Podržane valute uključuju: usd, eur, gbp, jpy, aud, cad, chf, cny i mnoge druge.
 
