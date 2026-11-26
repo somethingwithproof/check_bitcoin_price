@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Thomas Vincent <thomasvincent@gmail.com>
 # SPDX-License-Identifier: MIT
 
-"""Tests for 45-locale i18n support in check_bitcoin_price."""
+"""Tests for 48-locale i18n support in check_bitcoin_price."""
 
 import re
 
@@ -32,8 +32,8 @@ def _reset_locale(monkeypatch: pytest.MonkeyPatch) -> None:
     set_locale(None)
 
 
-def test_all_45_locales_load_with_key_placeholder_and_prefix_parity() -> None:
-    assert len(SUPPORTED_LOCALES) == 45
+def test_all_48_locales_load_with_key_placeholder_and_prefix_parity() -> None:
+    assert len(SUPPORTED_LOCALES) == 48
     en = load_catalog(DEFAULT_LOCALE)
     assert len(en) > 0
     for locale in SUPPORTED_LOCALES:
@@ -101,6 +101,20 @@ def test_all_45_locales_load_with_key_placeholder_and_prefix_parity() -> None:
         ("ur_PK", "ur"),
         ("ms_MY.UTF-8", "ms"),
         ("tl_PH.UTF-8", "fil"),
+        ("bs", "bs"),
+        ("bs-BA", "bs"),
+        ("bs_BA.UTF-8", "bs"),
+        ("hr", "hr"),
+        ("hr-HR", "hr"),
+        ("hr_HR.UTF-8", "hr"),
+        ("sr", "sr"),
+        ("sr-RS", "sr"),
+        ("sr_RS.UTF-8", "sr"),
+        ("sr-Cyrl", "sr"),
+        ("sr-Latn", "sr"),
+        ("sr-Cyrl-RS", "sr"),
+        ("sr-Latn-RS", "sr"),
+        ("sr_RS.UTF-8@latin", "sr"),
         ("xx_YY", "en"),
     ],
 )
@@ -153,3 +167,40 @@ def test_translation_fallback_and_cli_lang(capsys: pytest.CaptureFixture[str]) -
         assert " ".join(t("cli.description", locale=locale).split()) in " ".join(
             out.split()
         ), locale
+
+
+def test_bcms_locales_script_distinction_and_lang_env_help(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bs_cat = load_catalog("bs")
+    hr_cat = load_catalog("hr")
+    sr_cat = load_catalog("sr")
+
+    # Serbian catalog must use Serbian Cyrillic script
+    cyrillic_re = re.compile(r"[\u0400-\u04FF]")
+    for key, val in sr_cat.items():
+        assert cyrillic_re.search(val), key
+
+    # Bosnian and Croatian catalogs must be genuinely distinct
+    differing_keys = [k for k in bs_cat if bs_cat[k] != hr_cat[k]]
+    assert len(differing_keys) >= 15
+    assert bs_cat["cli.state_file_help"] != hr_cat["cli.state_file_help"]
+    assert bs_cat["error.unexpected"] != hr_cat["error.unexpected"]
+    assert bs_cat["cli.verbose_help"] != hr_cat["cli.verbose_help"]
+
+    # Verify CLI --help renders cleanly via LANG environment variable
+    for env_lang, expected_locale in (
+        ("bs_BA.UTF-8", "bs"),
+        ("hr_HR.UTF-8", "hr"),
+        ("sr_RS.UTF-8", "sr"),
+    ):
+        monkeypatch.setenv("LANG", env_lang)
+        set_locale(None)
+        with pytest.raises(SystemExit) as exc:
+            parse_args(["--help"])
+        assert exc.value.code == 0, env_lang
+        out = capsys.readouterr().out
+        assert " ".join(
+            t("cli.description", locale=expected_locale).split()
+        ) in " ".join(out.split()), env_lang
