@@ -63,12 +63,16 @@ def test_all_20_locales_load_with_key_placeholder_and_prefix_parity() -> None:
         ("de_AT@euro", "de"),
         ("zh_TW", "zh-TW"),
         ("zh_HK.UTF-8", "zh-TW"),
+        ("zh-TW-x-demo", "zh-TW"),
+        ("zh-HK-x-demo", "zh-TW"),
         ("zh-Hant-TW", "zh-TW"),
+        ("zh-Hans-TW", "zh-CN"),
         ("zh_CN.UTF-8", "zh-CN"),
         ("zh", "zh-CN"),
         ("pt_BR.UTF-8", "pt-BR"),
         ("pt_PT", "pt-BR"),
         ("hi_IN.UTF-8", "hi"),
+        ("x-demo", "en"),
         ("xx_YY", "en"),
     ],
 )
@@ -113,7 +117,11 @@ def test_translation_fallback_and_cli_lang(capsys: pytest.CaptureFixture[str]) -
     assert parsed_eq.lang == "ja"
     assert get_locale() == "ja"
 
-    with pytest.raises(SystemExit) as exc:
-        parse_args(["--lang=fr", "--help"])
-    assert exc.value.code == 0
-    assert t("cli.description", locale="fr") in capsys.readouterr().out
+    for locale in SUPPORTED_LOCALES:
+        with pytest.raises(SystemExit) as exc:
+            parse_args([f"--lang={locale}", "--help"])
+        assert exc.value.code == 0, locale
+        out = capsys.readouterr().out
+        assert " ".join(t("cli.description", locale=locale).split()) in " ".join(
+            out.split()
+        ), locale
