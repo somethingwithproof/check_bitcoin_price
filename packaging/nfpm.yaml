@@ -17,6 +17,10 @@ contents:
     dst: /usr/share/check-bitcoin-price/check_bitcoin_price/
     file_info:
       mode: 0644
+  - src: check_bitcoin_price/locales/*.json
+    dst: /usr/share/check-bitcoin-price/check_bitcoin_price/locales/
+    file_info:
+      mode: 0644
   - src: check_bitcoin_price/py.typed
     dst: /usr/share/check-bitcoin-price/check_bitcoin_price/py.typed
     file_info:

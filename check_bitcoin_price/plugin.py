@@ -20,6 +20,7 @@ from typing import NamedTuple, Never
 import requests
 
 from check_bitcoin_price import __version__
+from check_bitcoin_price.i18n import set_locale, t
 from check_bitcoin_price.movement import OutOfOrderSampleError, record_price
 from check_bitcoin_price.quotes import (
     PriceQuote,
@@ -63,14 +64,14 @@ class PluginArgumentParser(argparse.ArgumentParser):
 def validate_thresholds(
     low: float | None,
     high: float | None,
-    ordering: str = "Low threshold must not exceed high threshold",
+    ordering: str | None = None,
 ) -> None:
     """Require finite, nonnegative bounds in ascending order."""
     for value in (low, high):
         if value is not None and (not math.isfinite(value) or value < 0):
-            raise ConfigurationError("Thresholds must be finite, nonnegative numbers")
+            raise ConfigurationError(t("config.thresholds_nonnegative"))
     if low is not None and high is not None and low > high:
-        raise ConfigurationError(ordering)
+        raise ConfigurationError(ordering or t("config.low_exceeds_high"))
 
 
 def may_succeed_elsewhere(error: requests.RequestException) -> bool:
@@ -120,15 +121,15 @@ class BitcoinPriceChecker:
         self.fallback_urls = fallback_urls
         self.source = "primary"
         if not math.isfinite(timeout) or timeout <= 0:
-            raise ConfigurationError("Timeout must be finite and greater than zero")
+            raise ConfigurationError(t("config.timeout_positive"))
         if not 0 <= retries <= 5:
-            raise ConfigurationError("Retries must be between zero and five")
+            raise ConfigurationError(t("config.retries_range"))
         if max_age is not None and (not math.isfinite(max_age) or max_age <= 0):
-            raise ConfigurationError("Maximum age must be finite and greater than zero")
+            raise ConfigurationError(t("config.max_age_positive"))
         self.timeout = timeout
         self.currency = currency.lower()
         if CURRENCY_CODE.fullmatch(self.currency) is None:
-            raise ConfigurationError("Currency must be 2-16 letters or digits")
+            raise ConfigurationError(t("config.currency_format"))
         self.retries = retries
         self.max_age = max_age
 
@@ -210,9 +211,9 @@ class BitcoinPriceChecker:
         currency_upper = self.currency.upper()
 
         # Critical always takes precedence over warning, including overlapping bounds.
-        for status, label, low, high in (
-            (CRITICAL, "CRITICAL", critical_low, critical_high),
-            (WARNING, "WARNING", warning_low, warning_high),
+        for status, level, low, high in (
+            (CRITICAL, "critical", critical_low, critical_high),
+            (WARNING, "warning", warning_low, warning_high),
         ):
             if low is not None and price < low:
                 direction, bound = "below", low
@@ -222,13 +223,29 @@ class BitcoinPriceChecker:
                 continue
             return ThresholdResult(
                 status,
-                f"{label} - Bitcoin price {price:.2f} {currency_upper} is {direction} "
-                f"{label.lower()} threshold {bound:.2f} {currency_upper}",
+                t(
+                    f"status.price_{direction}_{level}",
+                    price=f"{price:.2f}",
+                    bound=f"{bound:.2f}",
+                    currency=currency_upper,
+                ),
             )
 
         return ThresholdResult(
-            OK, f"OK - Bitcoin price is {price:.2f} {currency_upper}"
+            OK,
+            t("status.price_ok", price=f"{price:.2f}", currency=currency_upper),
         )
+
+
+def _extract_lang(args: list[str] | None) -> str | None:
+    """Read --lang before argparse runs so --help uses the requested locale."""
+    raw = sys.argv[1:] if args is None else args
+    for idx, arg in enumerate(raw):
+        if arg == "--lang" and idx + 1 < len(raw):
+            return str(raw[idx + 1])
+        if isinstance(arg, str) and arg.startswith("--lang="):
+            return arg.split("=", 1)[1]
+    return None
 
 
 def parse_args(args: list | None = None) -> argparse.Namespace:
@@ -241,122 +258,108 @@ def parse_args(args: list | None = None) -> argparse.Namespace:
     Returns:
         Parsed arguments namespace
     """
+    set_locale(_extract_lang(args))
     parser = PluginArgumentParser(
-        description="Nagios plugin to check Bitcoin price",
+        description=t("cli.description"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  %(prog)s
-    Check Bitcoin price without thresholds (valid quotes return OK)
-
-  %(prog)s -w 30000:50000 -c 25000:60000
-    Warning if price is below 30000 or above 50000
-    Critical if price is below 25000 or above 60000
-
-  %(prog)s --warning-low 30000 --critical-low 25000
-    Only alert on price drops
-
-  %(prog)s --currency eur
-    Check price in EUR instead of USD
-        """,
+        epilog="\n" + t("cli.epilog") + "\n        ",
     )
 
     parser.add_argument(
         "-w",
         "--warning",
         type=str,
-        help="Warning threshold range (format: LOW:HIGH)",
+        help=t("cli.warning_help"),
     )
     parser.add_argument(
         "-c",
         "--critical",
         type=str,
-        help="Critical threshold range (format: LOW:HIGH)",
+        help=t("cli.critical_help"),
     )
     parser.add_argument(
         "--warning-low",
         type=float,
-        help="Warning threshold for low price",
+        help=t("cli.warning_low_help"),
     )
     parser.add_argument(
         "--warning-high",
         type=float,
-        help="Warning threshold for high price",
+        help=t("cli.warning_high_help"),
     )
     parser.add_argument(
         "--critical-low",
         type=float,
-        help="Critical threshold for low price",
+        help=t("cli.critical_low_help"),
     )
     parser.add_argument(
         "--critical-high",
         type=float,
-        help="Critical threshold for high price",
+        help=t("cli.critical_high_help"),
     )
     parser.add_argument(
         "--currency",
         type=str,
         default=DEFAULT_CURRENCY,
-        help=f"Currency code, 2-16 letters or digits (default: {DEFAULT_CURRENCY})",
+        help=t("cli.currency_help", default=DEFAULT_CURRENCY),
     )
     parser.add_argument(
         "--timeout",
         type=float,
         default=DEFAULT_TIMEOUT,
-        help=f"Total request/retry deadline in seconds (default: {DEFAULT_TIMEOUT})",
+        help=t("cli.timeout_help", default=DEFAULT_TIMEOUT),
     )
-    parser.add_argument(
-        "--retries", type=int, default=1, help="Transient retries (0-5; default: 1)"
-    )
+    parser.add_argument("--retries", type=int, default=1, help=t("cli.retries_help"))
     parser.add_argument(
         "--max-age",
         type=float,
-        help=f"Maximum quote age in seconds; require vendor timestamp "
-        f"(default: {DEFAULT_MAX_AGE} when the quote has a timestamp)",
+        help=t("cli.max_age_help", default=DEFAULT_MAX_AGE),
     )
     parser.add_argument(
         "--warning-change",
         type=float,
-        help="Warn when absolute 24-hour change exceeds this percentage",
+        help=t("cli.warning_change_help"),
     )
     parser.add_argument(
         "--critical-change",
         type=float,
-        help="Critical when absolute 24-hour change exceeds this percentage",
+        help=t("cli.critical_change_help"),
     )
     parser.add_argument(
         "--api-url",
         type=str,
         default=DEFAULT_API_URL,
-        help="Custom API URL (default: CoinGecko API)",
+        help=t("cli.api_url_help"),
     )
     parser.add_argument(
         "--fallback-url",
         action="append",
         default=[],
-        help="Additional CoinGecko-compatible endpoint (repeatable)",
+        help=t("cli.fallback_url_help"),
     )
-    parser.add_argument(
-        "--state-file", type=Path, help="JSON history for short-window movement"
-    )
-    parser.add_argument(
-        "--move-window", type=float, help="Movement window in seconds (default: 3600)"
-    )
+    parser.add_argument("--state-file", type=Path, help=t("cli.state_file_help"))
+    parser.add_argument("--move-window", type=float, help=t("cli.move_window_help"))
     parser.add_argument(
         "--warning-move",
         type=float,
-        help="Warning limit for absolute window movement in percent",
+        help=t("cli.warning_move_help"),
     )
     parser.add_argument(
         "--critical-move",
         type=float,
-        help="Critical limit for absolute window movement in percent",
+        help=t("cli.critical_move_help"),
+    )
+    parser.add_argument(
+        "--lang",
+        type=str,
+        default=None,
+        help=t("cli.lang_help"),
     )
     parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
-        help="Enable verbose output",
+        help=t("cli.verbose_help"),
     )
     parser.add_argument(
         "-V",
@@ -365,7 +368,9 @@ Examples:
         version=f"%(prog)s {__version__}",
     )
 
-    return parser.parse_args(args)
+    parsed = parser.parse_args(args)
+    set_locale(parsed.lang)
+    return parsed
 
 
 def parse_range(range_str: str) -> tuple[float | None, float | None]:
@@ -382,17 +387,17 @@ def parse_range(range_str: str) -> tuple[float | None, float | None]:
         ValueError: If range format is invalid
     """
     if ":" not in range_str:
-        raise ConfigurationError("Invalid range format. Expected LOW:HIGH")
+        raise ConfigurationError(t("config.invalid_range_format"))
 
     parts = range_str.split(":")
     if len(parts) != 2:
-        raise ConfigurationError("Invalid range format. Expected LOW:HIGH")
+        raise ConfigurationError(t("config.invalid_range_format"))
 
     try:
         low = float(parts[0]) if parts[0] else None
         high = float(parts[1]) if parts[1] else None
     except ValueError as exc:
-        raise ConfigurationError("Range bounds must be numbers") from exc
+        raise ConfigurationError(t("config.range_bounds_numbers")) from exc
     validate_thresholds(low, high)
 
     return low, high
@@ -417,15 +422,19 @@ def check_change(
     label_period: str = "24-hour",
 ) -> ThresholdResult:
     """Alert on the magnitude of signed movement over the given period."""
-    for status, label, limit in (
-        (CRITICAL, "CRITICAL", critical),
-        (WARNING, "WARNING", warning),
+    for status, key, limit in (
+        (CRITICAL, "status.change_critical", critical),
+        (WARNING, "status.change_warning", warning),
     ):
         if change is not None and limit is not None and abs(change) > limit:
             return ThresholdResult(
                 status,
-                f"{label} - Bitcoin {label_period} change {change:+.2f}% exceeds "
-                f"{label.lower()} limit {plain_number(limit)}%",
+                t(
+                    key,
+                    period=label_period,
+                    change=f"{change:+.2f}",
+                    limit=plain_number(limit),
+                ),
             )
     return ThresholdResult(OK, "OK")
 
@@ -478,7 +487,7 @@ def movement_window(parsed_args: argparse.Namespace) -> float:
     validate_thresholds(
         parsed_args.warning_move,
         parsed_args.critical_move,
-        "Warning move must not exceed critical move",
+        t("config.warning_move_exceeds_critical"),
     )
     move_options = (
         parsed_args.warning_move,
@@ -486,10 +495,10 @@ def movement_window(parsed_args: argparse.Namespace) -> float:
         parsed_args.move_window,
     )
     if parsed_args.state_file is None and any(x is not None for x in move_options):
-        raise ConfigurationError("Movement options require --state-file")
+        raise ConfigurationError(t("config.movement_requires_state_file"))
     window = 3600.0 if parsed_args.move_window is None else parsed_args.move_window
     if not math.isfinite(window) or window <= 0:
-        raise ConfigurationError("Movement window must be finite and positive")
+        raise ConfigurationError(t("config.movement_window_positive"))
     return float(window)
 
 
@@ -500,9 +509,9 @@ def window_movement(
     try:
         move, elapsed = record_price(state_file, currency, window, timestamp, price)
     except OutOfOrderSampleError as exc:
-        raise MovementStateError("Quote is older than movement history") from exc
+        raise MovementStateError(t("error.quote_older_than_history")) from exc
     except OSError as exc:
-        raise MovementStateError("Cannot update movement history") from exc
+        raise MovementStateError(t("error.cannot_update_history")) from exc
     return move, f"{elapsed:g}s"
 
 
@@ -517,7 +526,7 @@ def run_check(parsed_args: argparse.Namespace) -> ThresholdResult:
     validate_thresholds(
         parsed_args.warning_change,
         parsed_args.critical_change,
-        "Warning change must not exceed critical change",
+        t("config.warning_change_exceeds_critical"),
     )
     window = movement_window(parsed_args)
     checker = BitcoinPriceChecker(
@@ -534,7 +543,7 @@ def run_check(parsed_args: argparse.Namespace) -> ThresholdResult:
         limit = DEFAULT_MAX_AGE if checker.max_age is None else checker.max_age
         checker.max_age = min(limit, window)
     if parsed_args.verbose:
-        print("Fetching Bitcoin price...", file=sys.stderr)
+        print(t("status.fetching"), file=sys.stderr)
     require_change = (
         parsed_args.warning_change is not None
         or parsed_args.critical_change is not None
@@ -558,7 +567,9 @@ def run_check(parsed_args: argparse.Namespace) -> ThresholdResult:
     if checker.fallback_urls:
         details.append(f"source={checker.source}")
         if parsed_args.verbose:
-            print(f"Quote received from {checker.source}", file=sys.stderr)
+            print(
+                t("status.quote_received_from", source=checker.source), file=sys.stderr
+            )
     if parsed_args.state_file is not None and quote.timestamp is not None:
         move, period = window_movement(
             parsed_args.state_file,
@@ -573,9 +584,9 @@ def run_check(parsed_args: argparse.Namespace) -> ThresholdResult:
         if window_result.status > result.status:
             result = window_result
         elif move is None:
-            details.append("movement baseline pending")
+            details.append(t("status.movement_baseline_pending"))
         else:
-            details.append(f"move={move:+.2f}% over {period}")
+            details.append(t("status.move_detail", move=f"{move:+.2f}", period=period))
         perfdata += " " + change_metric(
             "bitcoin_move_window",
             move,
@@ -603,13 +614,13 @@ def main(args: list | None = None) -> int:
         return result.status
 
     except ConfigurationError as e:
-        print(f"UNKNOWN - Invalid configuration: {e}")
+        print(t("error.invalid_configuration", error=e))
         return UNKNOWN
     except MovementStateError as e:
         print(f"UNKNOWN - {e}")
         return UNKNOWN
     except requests.Timeout:
-        print("UNKNOWN - API request timed out")
+        print(t("error.api_timeout"))
         return UNKNOWN
     except requests.RequestException as e:
         detail = (
@@ -618,13 +629,13 @@ def main(args: list | None = None) -> int:
             else type(e).__name__
         )
         # Exception strings may contain credentials embedded in a custom URL.
-        print(f"UNKNOWN - API request failed: {detail}")
+        print(t("error.api_request_failed", detail=detail))
         return UNKNOWN
     except (KeyError, ValueError) as e:
-        print(f"UNKNOWN - Failed to parse API response: {e}")
+        print(t("error.parse_failed", error=e))
         return UNKNOWN
     except Exception as e:
-        print(f"UNKNOWN - Unexpected error: {e}")
+        print(t("error.unexpected", error=e))
         return UNKNOWN
 
 

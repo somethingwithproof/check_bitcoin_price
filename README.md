@@ -343,6 +343,15 @@ These changes ship in 2.0.0.
 - Thresholds of one million or more appear in performance data as plain
   decimals instead of exponent notation.
 
+## Localization
+
+CLI help, validation errors, and plugin status descriptions support 20 locales (`en`, `de`, `es`, `fr`, `it`, `pt-BR`, `nl`, `ru`, `uk`, `ja`, `ko`, `zh-CN`, `zh-TW`, `ar`, `hi`, `pl`, `tr`, `sv`, `vi`, `id`) using bundled stdlib-loaded catalogs. Resolution checks `--lang`, then `LC_ALL`, `LC_MESSAGES`, and `LANG`, falling back to `en`. Nagios status prefixes (`OK`, `WARNING`, `CRITICAL`, `UNKNOWN`) and performance data remain unchanged across all locales.
+
+```bash
+check_bitcoin_price --lang de
+LANG=ja_JP.UTF-8 check_bitcoin_price --help
+```
+
 ## Development
 
 Install [mise](https://mise.jdx.dev/getting-started.html), then run the development setup above. `mise.toml` pins Python and uv. Development tools are declared in `pyproject.toml` and resolved in the committed `uv.lock`.
